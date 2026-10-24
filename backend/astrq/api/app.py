@@ -147,12 +147,15 @@ def create_app(settings: Settings) -> FastAPI:
                     "manifest": r.tool.manifest().model_dump(),
                     "config": r.ctx.config.model_dump(),
                     "status": r.status_dict(),
+                    "control_enabled": settings.api.allow_tool_control,
                 }
             )
         return out
 
     @app.post("/api/tools/{tool_id}/enabled")
     async def set_enabled(tool_id: str, body: EnabledBody) -> dict[str, Any]:
+        if not settings.api.allow_tool_control:
+            raise HTTPException(403, "tool control is disabled on this deployment")
         if tool_id not in platform.runners:
             raise HTTPException(404, "unknown tool")
         platform.set_tool_enabled(tool_id, body.enabled)

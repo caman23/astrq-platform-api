@@ -224,6 +224,9 @@ class ApiConfig(BaseModel):
     # Add it with a Cloudflare Transform Rule on your domain so the host's default URL
     # (e.g. *.onrender.com) cannot bypass Cloudflare Access.
     origin_secret: SecretStr | None = None
+    # Allow enabling/disabling tools from the web UI/API. Turn off on public deployments
+    # (no login) so visitors cannot switch the radar off; Telegram /on /off still works.
+    allow_tool_control: bool = True
 
 
 class Settings(BaseSettings):
