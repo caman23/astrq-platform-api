@@ -210,6 +210,40 @@ async def _dnse_check(args: argparse.Namespace) -> None:
     )
 
 
+async def _r2_check(args: argparse.Namespace) -> None:
+    """Write, read back and compare a small object in the configured R2 bucket."""
+    from datetime import UTC, datetime
+
+    from astrq.core.remote_store import R2Client
+
+    settings = load_settings(args.config)
+    cfg = settings.storage.remote
+    if cfg.kind != "r2":
+        raise SystemExit(
+            "Chưa bật R2: thêm ASTRQ_STORAGE__REMOTE__KIND=r2 và 4 biến ENDPOINT, BUCKET, "
+            "ACCESS_KEY_ID, SECRET_ACCESS_KEY vào .env"
+        )
+    client = R2Client(cfg)
+    key = "healthcheck/r2-check.txt"
+    body = f"astrq r2-check {datetime.now(UTC).isoformat()}".encode()
+    try:
+        await client.put(key, body, "text/plain")
+        print(f"✔ Ghi được vào bucket '{cfg.bucket}' ({cfg.prefix}{key})")
+        got = await client.get(key)
+        if got != body:
+            raise SystemExit("✖ Đọc lại không khớp nội dung vừa ghi")
+        print("✔ Đọc lại khớp — thông tin R2 đúng, dùng được cho Render")
+    except RuntimeError as exc:
+        hint = {
+            "403": "sai Access Key/Secret, hoặc token không có quyền Object Read & Write",
+            "404": "sai tên bucket hoặc sai Endpoint (account id)",
+        }
+        code = next((c for c in hint if c in str(exc)), None)
+        raise SystemExit(f"✖ {exc}" + (f" → {hint[code]}" if code else "")) from None
+    finally:
+        await client.close()
+
+
 async def _ssi_universe(args: argparse.Namespace) -> None:
     """Write the official index constituents (SSI IndexComponents) to the universe file."""
     from datetime import datetime
@@ -287,6 +321,8 @@ def main() -> None:
     dn.add_argument("--show", type=int, default=10, help="sample events to print")
     dn.add_argument("--symbols", help="comma list, default: universe file")
 
+    sub.add_parser("r2-check", help="test Cloudflare R2 credentials (write + read back)")
+
     u = sub.add_parser("ssi-universe", help="write official index constituents from SSI")
     u.add_argument("--index", default="VN100")
     u.add_argument("--out", help="default: universe.file from settings")
@@ -299,6 +335,7 @@ def main() -> None:
         "backtest": _backtest,
         "ssi-check": _ssi_check,
         "dnse-check": _dnse_check,
+        "r2-check": _r2_check,
         "ssi-universe": _ssi_universe,
     }
     try:
