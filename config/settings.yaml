@@ -1,0 +1,99 @@
+# ASTRQ Stock Tools Platform — main configuration.
+# Every value can be overridden by env vars: ASTRQ_<SECTION>__<KEY>=...
+# Secrets (Telegram token, vendor keys) MUST come from env (.env), never from this file.
+
+provider:
+  kind: synthetic          # synthetic | replay | dnse (skeleton) | ssi (skeleton)
+  synthetic:
+    seed: 42
+    speed: 30              # simulated seconds per wall second (0 = offline/as fast as possible)
+    trading_date: null     # null = today (Vietnam time)
+    start_time: "09:13:30" # start just before the ATO match for a quick demo
+    emit_side_flag: true   # false = exercise quote/tick-rule side inference
+    emit_quotes: true
+    parent_orders_per_hour: 45
+    block_trades_per_hour: 15
+    put_through_per_hour: 4
+  replay:
+    path: data/ticks/replay.jsonl
+    speed: 20
+
+universe:
+  file: config/universe_vn100.yaml
+  reload_interval_sec: 300
+
+sessions:
+  timezone: Asia/Ho_Chi_Minh
+  # Synthetic demo runs any day; set true for real feeds so weekends/holidays are CLOSED.
+  enforce_trading_days: false
+  # TODO(verify): confirm current HOSE session times against the exchange regulation.
+  schedule:
+    - { session: ato,           start: "09:00", end: "09:15" }
+    - { session: continuous_am, start: "09:15", end: "11:30" }
+    - { session: lunch,         start: "11:30", end: "13:00" }
+    - { session: continuous_pm, start: "13:00", end: "14:30" }
+    - { session: atc,           start: "14:30", end: "14:45" }
+    - { session: put_through,   start: "14:45", end: "15:00" }
+  holidays: []             # TODO(verify): load the official holiday calendar
+
+market_rules:
+  # TODO(verify): HOSE tick-size ladder (VND).
+  tick_sizes:
+    - { exchange: HOSE, below: 10000, size: 10 }
+    - { exchange: HOSE, below: 50000, size: 50 }
+    - { exchange: HOSE, below: null,  size: 100 }
+
+bus:
+  queue_size: 20000
+
+tools:
+  large_order_radar:
+    enabled: true
+    module: astrq.tools.large_order_radar:LargeOrderRadar
+    timeout_ms: 250
+    timer_interval_sec: 5
+    config:
+      abs_threshold_value: 500000000   # 500 triệu — giá trị khởi đầu, chỉnh theo dữ liệu
+      relative_k: 10
+      group_gap_sec: 30
+      price_band_ticks: 3
+      group_open_value: 1500000000
+      update_step_ratio: 0.5
+      idle_close_sec: 90
+      notice_score: 40
+      alert_score: 65
+      absorption_enabled: false
+  tick_counter:
+    enabled: true
+    module: astrq.tools.tick_counter:TickCounter
+    config:
+      milestone: 2000
+
+alerts:
+  cooldown_sec: 120
+  dashboard_min_severity: notice
+  telegram:
+    enabled: false         # set ASTRQ_ALERTS__TELEGRAM__ENABLED=true + token/chat id in .env
+    min_severity: alert
+    max_per_minute: 20
+
+storage:
+  data_dir: data
+  record_ticks: true
+  record_signals: true
+  retention_days: 14
+
+context:
+  kind: synthetic          # synthetic | none | vndirect (not implemented yet)
+  cache_ttl_sec: 21600
+  warmup_time: "08:30"
+  eod_summary_time: "15:05"
+
+api:
+  host: 127.0.0.1
+  port: 8000
+  cors_origins: ["http://localhost:5173", "http://127.0.0.1:5173","http://localhost:5500"]
+  # Sites allowed to embed the radar in an <iframe> (/embed). Add your other site here,
+  # e.g. "https://blog.example.com". Keep "'self'" (with the inner quotes) as the first item.
+  frame_ancestors: ["'self'", "https://astrq.io.vn", "https://*.astrq.io.vn","http://localhost:5500"]
+  frontend_dist: frontend/dist

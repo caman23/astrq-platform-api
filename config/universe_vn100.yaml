@@ -1,0 +1,122 @@
+# VN100 universe file. The radar scans exactly the symbols listed here; the
+# file is re-read at runtime (universe.reload_interval_sec) when it changes.
+#
+# !!! NOT VERIFIED !!!  This is a SAMPLE of large/liquid HOSE tickers used for
+# development with synthetic data. It is NOT the official VN100 basket.
+# Before going live, replace it with the official constituents published by
+# HOSE (index rebalancing happens periodically) and set `verified: true`.
+# See docs/open-questions.md #4.
+name: VN100 (sample, unverified)
+as_of: null
+source: "manual sample for development"
+verified: false
+instruments:
+  # Banks
+  - { symbol: VCB, sector: "Ngân hàng" }
+  - { symbol: BID, sector: "Ngân hàng" }
+  - { symbol: CTG, sector: "Ngân hàng" }
+  - { symbol: TCB, sector: "Ngân hàng" }
+  - { symbol: VPB, sector: "Ngân hàng" }
+  - { symbol: MBB, sector: "Ngân hàng" }
+  - { symbol: ACB, sector: "Ngân hàng" }
+  - { symbol: HDB, sector: "Ngân hàng" }
+  - { symbol: STB, sector: "Ngân hàng" }
+  - { symbol: SHB, sector: "Ngân hàng" }
+  - { symbol: TPB, sector: "Ngân hàng" }
+  - { symbol: VIB, sector: "Ngân hàng" }
+  - { symbol: LPB, sector: "Ngân hàng" }
+  - { symbol: MSB, sector: "Ngân hàng" }
+  - { symbol: OCB, sector: "Ngân hàng" }
+  - { symbol: EIB, sector: "Ngân hàng" }
+  - { symbol: SSB, sector: "Ngân hàng" }
+  # Real estate
+  - { symbol: VHM, sector: "Bất động sản" }
+  - { symbol: VIC, sector: "Bất động sản" }
+  - { symbol: VRE, sector: "Bất động sản" }
+  - { symbol: NVL, sector: "Bất động sản" }
+  - { symbol: PDR, sector: "Bất động sản" }
+  - { symbol: KDH, sector: "Bất động sản" }
+  - { symbol: NLG, sector: "Bất động sản" }
+  - { symbol: DXG, sector: "Bất động sản" }
+  - { symbol: DIG, sector: "Bất động sản" }
+  - { symbol: KBC, sector: "Bất động sản" }
+  - { symbol: SZC, sector: "Bất động sản" }
+  - { symbol: HDG, sector: "Bất động sản" }
+  - { symbol: TCH, sector: "Bất động sản" }
+  - { symbol: HDC, sector: "Bất động sản" }
+  - { symbol: NTL, sector: "Bất động sản" }
+  - { symbol: DXS, sector: "Bất động sản" }
+  - { symbol: VPI, sector: "Bất động sản" }
+  - { symbol: SIP, sector: "Bất động sản" }
+  - { symbol: BCM, sector: "Bất động sản" }
+  # Securities
+  - { symbol: SSI, sector: "Chứng khoán" }
+  - { symbol: VND, sector: "Chứng khoán" }
+  - { symbol: VCI, sector: "Chứng khoán" }
+  - { symbol: HCM, sector: "Chứng khoán" }
+  - { symbol: FTS, sector: "Chứng khoán" }
+  - { symbol: CTS, sector: "Chứng khoán" }
+  - { symbol: VIX, sector: "Chứng khoán" }
+  - { symbol: BSI, sector: "Chứng khoán" }
+  - { symbol: ORS, sector: "Chứng khoán" }
+  # Materials & chemicals
+  - { symbol: HPG, sector: "Vật liệu" }
+  - { symbol: HSG, sector: "Vật liệu" }
+  - { symbol: NKG, sector: "Vật liệu" }
+  - { symbol: DGC, sector: "Hóa chất" }
+  - { symbol: DPM, sector: "Hóa chất" }
+  - { symbol: DCM, sector: "Hóa chất" }
+  - { symbol: CSV, sector: "Hóa chất" }
+  - { symbol: GVR, sector: "Cao su" }
+  - { symbol: PHR, sector: "Cao su" }
+  - { symbol: DPR, sector: "Cao su" }
+  - { symbol: BMP, sector: "Vật liệu" }
+  - { symbol: PTB, sector: "Vật liệu" }
+  - { symbol: AAA, sector: "Vật liệu" }
+  # Energy & utilities
+  - { symbol: GAS, sector: "Năng lượng" }
+  - { symbol: PLX, sector: "Năng lượng" }
+  - { symbol: PVD, sector: "Năng lượng" }
+  - { symbol: PVT, sector: "Năng lượng" }
+  - { symbol: POW, sector: "Điện" }
+  - { symbol: NT2, sector: "Điện" }
+  - { symbol: REE, sector: "Điện" }
+  - { symbol: PC1, sector: "Điện" }
+  - { symbol: GEX, sector: "Điện" }
+  - { symbol: GEG, sector: "Điện" }
+  # Consumer & retail
+  - { symbol: VNM, sector: "Tiêu dùng" }
+  - { symbol: MSN, sector: "Tiêu dùng" }
+  - { symbol: SAB, sector: "Tiêu dùng" }
+  - { symbol: KDC, sector: "Tiêu dùng" }
+  - { symbol: SBT, sector: "Tiêu dùng" }
+  - { symbol: PAN, sector: "Tiêu dùng" }
+  - { symbol: DBC, sector: "Tiêu dùng" }
+  - { symbol: HAG, sector: "Tiêu dùng" }
+  - { symbol: VHC, sector: "Thủy sản" }
+  - { symbol: ANV, sector: "Thủy sản" }
+  - { symbol: MWG, sector: "Bán lẻ" }
+  - { symbol: PNJ, sector: "Bán lẻ" }
+  - { symbol: FRT, sector: "Bán lẻ" }
+  - { symbol: DGW, sector: "Bán lẻ" }
+  # Technology
+  - { symbol: FPT, sector: "Công nghệ" }
+  - { symbol: CMG, sector: "Công nghệ" }
+  # Industrials, construction & logistics
+  - { symbol: GMD, sector: "Logistics" }
+  - { symbol: VSC, sector: "Logistics" }
+  - { symbol: HAH, sector: "Logistics" }
+  - { symbol: VJC, sector: "Hàng không" }
+  - { symbol: HVN, sector: "Hàng không" }
+  - { symbol: CII, sector: "Xây dựng" }
+  - { symbol: VCG, sector: "Xây dựng" }
+  - { symbol: HHV, sector: "Xây dựng" }
+  - { symbol: LCG, sector: "Xây dựng" }
+  - { symbol: FCN, sector: "Xây dựng" }
+  - { symbol: CTD, sector: "Xây dựng" }
+  - { symbol: VGC, sector: "Xây dựng" }
+  # Insurance & healthcare
+  - { symbol: BVH, sector: "Bảo hiểm" }
+  - { symbol: BMI, sector: "Bảo hiểm" }
+  - { symbol: DHG, sector: "Dược phẩm" }
+  - { symbol: IMP, sector: "Dược phẩm" }

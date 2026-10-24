@@ -1,0 +1,30 @@
+[
+ {
+  "t": "09:14:59",
+  "symbol": "AAA",
+  "kind": "block_auction",
+  "side": "unknown",
+  "n": 1,
+  "value": 3000000000,
+  "score": 69.4,
+  "severity": "alert",
+  "flags": [
+   "auction",
+   "side_unknown"
+  ]
+ },
+ {
+  "t": "14:44:59",
+  "symbol": "AAA",
+  "kind": "block_auction",
+  "side": "unknown",
+  "n": 1,
+  "value": 4020000000,
+  "score": 76.9,
+  "severity": "alert",
+  "flags": [
+   "auction",
+   "side_unknown"
+  ]
+ }
+]
