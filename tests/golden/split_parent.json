@@ -1,0 +1,46 @@
+[
+ {
+  "t": "10:00:25",
+  "symbol": "AAA",
+  "kind": "block_order_open",
+  "side": "buy",
+  "n": 4,
+  "value": 598370000,
+  "score": 39.9,
+  "severity": "info",
+  "flags": []
+ },
+ {
+  "t": "10:00:40",
+  "symbol": "AAA",
+  "kind": "block_order_update",
+  "side": "buy",
+  "n": 7,
+  "value": 1043850000,
+  "score": 52.9,
+  "severity": "notice",
+  "flags": []
+ },
+ {
+  "t": "10:01:00",
+  "symbol": "AAA",
+  "kind": "block_order_update",
+  "side": "buy",
+  "n": 11,
+  "value": 1639550000,
+  "score": 64.1,
+  "severity": "notice",
+  "flags": []
+ },
+ {
+  "t": "10:02:40",
+  "symbol": "AAA",
+  "kind": "block_order_close",
+  "side": "buy",
+  "n": 12,
+  "value": 1788660000,
+  "score": 64.9,
+  "severity": "notice",
+  "flags": []
+ }
+]

@@ -1,0 +1,41 @@
+[
+ {
+  "t": "10:05:20",
+  "symbol": "BBB",
+  "kind": "block_order_open",
+  "side": "buy",
+  "n": 4,
+  "value": 605250000,
+  "score": 41.8,
+  "severity": "notice",
+  "flags": [
+   "side_inferred"
+  ]
+ },
+ {
+  "t": "10:05:30",
+  "symbol": "BBB",
+  "kind": "block_order_update",
+  "side": "buy",
+  "n": 6,
+  "value": 910125000,
+  "score": 52.1,
+  "severity": "notice",
+  "flags": [
+   "side_inferred"
+  ]
+ },
+ {
+  "t": "10:07:10",
+  "symbol": "BBB",
+  "kind": "block_order_close",
+  "side": "buy",
+  "n": 7,
+  "value": 1063125000,
+  "score": 54.9,
+  "severity": "notice",
+  "flags": [
+   "side_inferred"
+  ]
+ }
+]

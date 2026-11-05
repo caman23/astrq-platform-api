@@ -10,3 +10,4 @@ frontend/dist/
 data/
 .env
 .tunnel/
+backend-rs/target/

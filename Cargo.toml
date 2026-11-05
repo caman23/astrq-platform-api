@@ -1,0 +1,51 @@
+[package]
+name = "astrq"
+version = "0.2.0"
+edition = "2021"
+description = "Stock Tools Platform — read-only realtime analysis tools for Vietnamese equities"
+license = "UNLICENSED"
+publish = false
+
+[[bin]]
+name = "astrq"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+axum = { version = "0.8", features = ["ws", "macros"] }
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+clap = { version = "4", features = ["derive"] }
+dotenvy = "0.15"
+flate2 = "1"
+futures-util = "0.3"
+hex = "0.4"
+hmac = "0.12"
+parking_lot = "0.12"
+rand = "0.8"
+rand_chacha = "0.3"
+rand_distr = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+schemars = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml = "0.9"
+sha2 = "0.10"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+tower-http = { version = "0.6", features = ["cors", "compression-gzip", "fs", "set-header"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+uuid = { version = "1", features = ["v5"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
