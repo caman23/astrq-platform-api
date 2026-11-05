@@ -19,7 +19,14 @@ pub struct ScoreWeights {
 
 impl Default for ScoreWeights {
     fn default() -> Self {
-        Self { value: 0.28, relative: 0.24, velocity: 0.14, concentration: 0.12, impact: 0.12, side_confidence: 0.10 }
+        Self {
+            value: 0.28,
+            relative: 0.24,
+            velocity: 0.14,
+            concentration: 0.12,
+            impact: 0.12,
+            side_confidence: 0.10,
+        }
     }
 }
 
@@ -89,7 +96,10 @@ impl Default for RadarConfig {
         Self {
             abs_threshold_value: 500e6,
             relative_k: 10.0,
-            tier_relative_k: [("high", 12.0), ("mid", 10.0), ("low", 8.0)].into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+            tier_relative_k: [("high", 12.0), ("mid", 10.0), ("low", 8.0)]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
             relative_min_value: 150e6,
             child_min_value: 100e6,
             child_relative_k: 4.0,

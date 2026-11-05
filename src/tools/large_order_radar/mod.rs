@@ -78,7 +78,12 @@ impl LargeOrderRadar {
     pub fn new(cfg: RadarConfig) -> Self {
         Self {
             classifier: SideClassifier::new(cfg.quote_stale_sec),
-            book: GroupBook::new(cfg.group_gap_sec, cfg.price_band_ticks, cfg.update_step_ratio, cfg.max_trades_in_features),
+            book: GroupBook::new(
+                cfg.group_gap_sec,
+                cfg.price_band_ticks,
+                cfg.update_step_ratio,
+                cfg.max_trades_in_features,
+            ),
             windows: BTreeMap::new(),
             days: BTreeMap::new(),
             expected: BTreeMap::new(),
@@ -94,7 +99,9 @@ impl LargeOrderRadar {
 
     fn window(&mut self, symbol: &str) -> &mut SymbolWindow {
         let w = self.cfg.metrics_window_sec;
-        self.windows.entry(symbol.to_string()).or_insert_with(|| SymbolWindow::new(w))
+        self.windows
+            .entry(symbol.to_string())
+            .or_insert_with(|| SymbolWindow::new(w))
     }
 
     fn day(&mut self, symbol: &str) -> &mut DayTotals {
@@ -115,7 +122,8 @@ impl LargeOrderRadar {
     }
 
     fn baseline(&self, symbol: &str, ctx: &ToolContext) -> Option<Baseline> {
-        self.trading_date.and_then(|d| ctx.context.baseline(symbol, d))
+        self.trading_date
+            .and_then(|d| ctx.context.baseline(symbol, d))
     }
 
     fn symbol_features(&mut self, symbol: &str) -> Value {
@@ -125,7 +133,10 @@ impl LargeOrderRadar {
         o.insert("day_large_buy".into(), json!(py_round_int(day.large_buy)));
         o.insert("day_large_sell".into(), json!(py_round_int(day.large_sell)));
         o.insert("day_net_large".into(), json!(py_round_int(day.net_large())));
-        o.insert("day_putthrough_value".into(), json!(py_round_int(day.putthrough_value)));
+        o.insert(
+            "day_putthrough_value".into(),
+            json!(py_round_int(day.putthrough_value)),
+        );
         o.insert("day_putthrough_count".into(), json!(day.putthrough_count));
         o.insert("day_groups_opened".into(), json!(day.groups_opened));
         m
@@ -145,8 +156,19 @@ impl LargeOrderRadar {
     }
 
     fn make_signal(&mut self, ctx: &ToolContext, spec: SignalSpec) -> Signal {
-        let dedupe_key = format!("{}:{}:{}:{}:{}", Self::ID, spec.symbol, spec.correlation_id, spec.state, spec.dedupe_suffix);
-        let sector = ctx.universe.read().get(spec.symbol).and_then(|i| i.sector.clone());
+        let dedupe_key = format!(
+            "{}:{}:{}:{}:{}",
+            Self::ID,
+            spec.symbol,
+            spec.correlation_id,
+            spec.state,
+            spec.dedupe_suffix
+        );
+        let sector = ctx
+            .universe
+            .read()
+            .get(spec.symbol)
+            .and_then(|i| i.sector.clone());
         let mut features = spec.features;
         features.insert("sector".into(), json!(sector));
         features.insert("symbol_metrics".into(), self.symbol_features(spec.symbol));
@@ -171,7 +193,13 @@ impl LargeOrderRadar {
         }
     }
 
-    fn group_signal(&mut self, action: &str, g: &ParentGroup, ctx: &ToolContext, ts: DateTime<Utc>) -> Signal {
+    fn group_signal(
+        &mut self,
+        action: &str,
+        g: &ParentGroup,
+        ctx: &ToolContext,
+        ts: DateTime<Utc>,
+    ) -> Signal {
         let baseline = self.baseline(&g.symbol, ctx);
         let concentration = self.window(&g.symbol).side_concentration(g.side);
         let res = score(
@@ -207,12 +235,24 @@ impl LargeOrderRadar {
             self.day(&g.symbol).groups_opened += 1;
         }
         let ratio_note = match baseline.as_ref().filter(|b| b.median_trade_value > 0.0) {
-            Some(b) => format!(" · ×{:.0} trung vị lệnh", g.total_value / b.median_trade_value),
+            Some(b) => format!(
+                " · ×{:.0} trung vị lệnh",
+                g.total_value / b.median_trade_value
+            ),
             None => String::new(),
         };
-        let mv = if g.first_price != 0.0 { (g.last_price - g.first_price) / g.first_price * 100.0 } else { 0.0 };
+        let mv = if g.first_price != 0.0 {
+            (g.last_price - g.first_price) / g.first_price * 100.0
+        } else {
+            0.0
+        };
         let summary = vec![
-            format!("Nhóm lệnh {} · {} lệnh · {}{ratio_note}", state_vi(action), g.n_trades, fmt::vnd(g.total_value)),
+            format!(
+                "Nhóm lệnh {} · {} lệnh · {}{ratio_note}",
+                state_vi(action),
+                g.n_trades,
+                fmt::vnd(g.total_value)
+            ),
             format!(
                 "Giá {} → {} ({mv:+.2}%) · {}–{}",
                 fmt::price(g.first_price),
@@ -248,7 +288,10 @@ impl LargeOrderRadar {
                 "trades": g.trades.iter().map(TradeRec::to_json).collect::<Vec<_>>(),
             }),
         );
-        features.insert("baseline".into(), Self::baseline_features(baseline.as_ref()));
+        features.insert(
+            "baseline".into(),
+            Self::baseline_features(baseline.as_ref()),
+        );
         features.insert("summary_vi".into(), json!(summary));
         self.make_signal(
             ctx,
@@ -269,7 +312,13 @@ impl LargeOrderRadar {
         )
     }
 
-    fn single_signal(&mut self, t: &Tick, ctx: &ToolContext, kind: &str, mut flags: Vec<String>) -> Signal {
+    fn single_signal(
+        &mut self,
+        t: &Tick,
+        ctx: &ToolContext,
+        kind: &str,
+        mut flags: Vec<String>,
+    ) -> Signal {
         let baseline = self.baseline(&t.symbol, ctx);
         let res = score(
             &ScoreInput {
@@ -293,7 +342,12 @@ impl LargeOrderRadar {
         if kind == "block_putthrough" && severity.rank() > cap.rank() {
             severity = cap;
         }
-        let cid = format!("{}-{kind}-{}-{}", t.symbol, t.ts_exchange.timestamp_millis(), t.seq.unwrap_or(0));
+        let cid = format!(
+            "{}-{kind}-{}-{}",
+            t.symbol,
+            t.ts_exchange.timestamp_millis(),
+            t.seq.unwrap_or(0)
+        );
         let label = if kind == "block_putthrough" {
             "Thỏa thuận".to_string()
         } else {
@@ -318,11 +372,22 @@ impl LargeOrderRadar {
                 "triggers": triggers, "side_confidence": 0.0, "trades": [trade],
             }),
         );
-        features.insert("expected_price".into(), self.expected.get(&t.symbol).cloned().unwrap_or(Value::Null));
-        features.insert("baseline".into(), Self::baseline_features(baseline.as_ref()));
+        features.insert(
+            "expected_price".into(),
+            self.expected.get(&t.symbol).cloned().unwrap_or(Value::Null),
+        );
+        features.insert(
+            "baseline".into(),
+            Self::baseline_features(baseline.as_ref()),
+        );
         features.insert(
             "summary_vi".into(),
-            json!([format!("{label} · {} · giá {} · {}", fmt::vnd(t.value), fmt::price(t.price), fmt::hms(t.ts_exchange))]),
+            json!([format!(
+                "{label} · {} · giá {} · {}",
+                fmt::vnd(t.value),
+                fmt::price(t.price),
+                fmt::hms(t.ts_exchange)
+            )]),
         );
         self.make_signal(
             ctx,
@@ -351,7 +416,12 @@ impl LargeOrderRadar {
             day.putthrough_value += t.value;
             day.putthrough_count += 1;
             if t.value >= self.cfg.putthrough_min_value {
-                return vec![self.single_signal(t, ctx, "block_putthrough", vec!["negotiated".into(), "side_unknown".into()])];
+                return vec![self.single_signal(
+                    t,
+                    ctx,
+                    "block_putthrough",
+                    vec!["negotiated".into(), "side_unknown".into()],
+                )];
             }
             return vec![];
         }
@@ -362,7 +432,8 @@ impl LargeOrderRadar {
         let open_threshold = th.group_open_value(baseline.as_ref());
         let auction_value = th.auction_value(baseline.as_ref());
         let ts_epoch = t.ts_exchange.timestamp_micros() as f64 / 1e6;
-        self.window(&t.symbol).add(ts_epoch, c.side, t.value, flagged, t.price);
+        self.window(&t.symbol)
+            .add(ts_epoch, c.side, t.value, flagged, t.price);
         if flagged {
             let day = self.day(&t.symbol);
             match c.side {
@@ -374,7 +445,12 @@ impl LargeOrderRadar {
         if t.session.is_auction() {
             if t.value >= auction_value {
                 self.day(&t.symbol).auction_blocks += 1;
-                return vec![self.single_signal(t, ctx, "block_auction", vec!["auction".into(), "side_unknown".into()])];
+                return vec![self.single_signal(
+                    t,
+                    ctx,
+                    "block_auction",
+                    vec!["auction".into(), "side_unknown".into()],
+                )];
             }
             return vec![];
         }
@@ -393,9 +469,21 @@ impl LargeOrderRadar {
             triggers,
             seq: t.seq,
         };
-        let exchange = ctx.universe.read().get(&t.symbol).map(|i| i.exchange.clone()).unwrap_or_else(|| "HOSE".into());
+        let exchange = ctx
+            .universe
+            .read()
+            .get(&t.symbol)
+            .map(|i| i.exchange.clone())
+            .unwrap_or_else(|| "HOSE".into());
         let tick_size = ctx.rules.tick_size(t.price, &exchange);
-        let events = self.book.add(&t.symbol, rec, t.session, tick_size, open_threshold, baseline.is_none());
+        let events = self.book.add(
+            &t.symbol,
+            rec,
+            t.session,
+            tick_size,
+            open_threshold,
+            baseline.is_none(),
+        );
         let emit_close = self.cfg.emit_close;
         events
             .into_iter()
@@ -418,13 +506,25 @@ impl Tool for LargeOrderRadar {
             id: Self::ID.into(),
             version: self.version().into(),
             name: "Radar Lệnh Lớn".into(),
-            description: "Phát hiện giao dịch lớn và chuỗi lệnh cùng chiều bị chia nhỏ trên rổ VN100.".into(),
-            subscriptions: self.subscriptions().iter().map(Subscription::describe).collect(),
-            config_schema: serde_json::to_value(schemars::schema_for!(RadarConfig)).unwrap_or_default(),
-            signal_kinds: ["block_order_open", "block_order_update", "block_order_close", "block_auction", "block_putthrough"]
+            description:
+                "Phát hiện giao dịch lớn và chuỗi lệnh cùng chiều bị chia nhỏ trên rổ VN100.".into(),
+            subscriptions: self
+                .subscriptions()
                 .iter()
-                .map(|s| s.to_string())
+                .map(Subscription::describe)
                 .collect(),
+            config_schema: serde_json::to_value(schemars::schema_for!(RadarConfig))
+                .unwrap_or_default(),
+            signal_kinds: [
+                "block_order_open",
+                "block_order_update",
+                "block_order_close",
+                "block_auction",
+                "block_putthrough",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
             has_view: true,
         }
     }
@@ -465,7 +565,10 @@ impl Tool for LargeOrderRadar {
         };
         // build CLOSE signals before evicting, so their metrics describe the group's period
         let out = if self.cfg.emit_close {
-            events.into_iter().map(|(a, g)| self.group_signal(a, &g, ctx, now)).collect()
+            events
+                .into_iter()
+                .map(|(a, g)| self.group_signal(a, &g, ctx, now))
+                .collect()
         } else {
             vec![]
         };
@@ -503,15 +606,24 @@ impl Tool for LargeOrderRadar {
         Ok(())
     }
 
-    fn view(&self, signals: &[Signal], ctx: &ToolContext, params: &HashMap<String, String>) -> Option<Value> {
+    fn view(
+        &self,
+        signals: &[Signal],
+        ctx: &ToolContext,
+        params: &HashMap<String, String>,
+    ) -> Option<Value> {
         Some(view::build_view(signals, ctx, params, &self.days))
     }
 
     fn daily_summary(&self, _ctx: &ToolContext) -> Option<String> {
         let mut rows: Vec<(&String, &DayTotals)> = self.days.iter().collect();
         rows.sort_by(|a, b| b.1.net_large().total_cmp(&a.1.net_large()));
-        let buys: Vec<String> =
-            rows.iter().filter(|(_, d)| d.net_large() > 0.0).take(5).map(|(s, d)| format!("{s} {}", fmt::vnd(d.net_large()))).collect();
+        let buys: Vec<String> = rows
+            .iter()
+            .filter(|(_, d)| d.net_large() > 0.0)
+            .take(5)
+            .map(|(s, d)| format!("{s} {}", fmt::vnd(d.net_large())))
+            .collect();
         let sells: Vec<String> = rows
             .iter()
             .rev()
@@ -521,10 +633,19 @@ impl Tool for LargeOrderRadar {
             .collect();
         let groups: u64 = self.days.values().map(|d| d.groups_opened).sum();
         let pt: f64 = self.days.values().map(|d| d.putthrough_value).sum();
-        let or_dash = |v: Vec<String>| if v.is_empty() { "—".to_string() } else { v.join(", ") };
+        let or_dash = |v: Vec<String>| {
+            if v.is_empty() {
+                "—".to_string()
+            } else {
+                v.join(", ")
+            }
+        };
         Some(
             [
-                format!("📊 Tổng kết Radar Lệnh Lớn · {}", self.trading_date.map(|d| d.to_string()).unwrap_or_default()),
+                format!(
+                    "📊 Tổng kết Radar Lệnh Lớn · {}",
+                    self.trading_date.map(|d| d.to_string()).unwrap_or_default()
+                ),
                 format!("Số nhóm lệnh lớn: {groups} · Thỏa thuận: {}", fmt::vnd(pt)),
                 format!("Ròng lớn MUA nhiều nhất: {}", or_dash(buys)),
                 format!("Ròng lớn BÁN nhiều nhất: {}", or_dash(sells)),

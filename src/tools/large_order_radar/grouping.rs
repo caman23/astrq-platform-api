@@ -84,8 +84,18 @@ pub struct ParentGroup {
 }
 
 impl ParentGroup {
-    pub fn start(symbol: &str, tr: &TradeRec, session: Session, open_threshold: f64, cold: bool) -> Self {
-        let gid = format!("{symbol}-{}-{}", &tr.side.as_str()[..1], tr.ts.timestamp_millis());
+    pub fn start(
+        symbol: &str,
+        tr: &TradeRec,
+        session: Session,
+        open_threshold: f64,
+        cold: bool,
+    ) -> Self {
+        let gid = format!(
+            "{symbol}-{}-{}",
+            &tr.side.as_str()[..1],
+            tr.ts.timestamp_millis()
+        );
         Self {
             group_id: gid,
             symbol: symbol.into(),
@@ -116,20 +126,36 @@ impl ParentGroup {
     }
 
     pub fn vwap(&self) -> f64 {
-        if self.total_volume > 0 { self.total_value / self.total_volume as f64 } else { 0.0 }
+        if self.total_volume > 0 {
+            self.total_value / self.total_volume as f64
+        } else {
+            0.0
+        }
     }
     pub fn duration_sec(&self) -> f64 {
-        ((self.last_ts - self.first_ts).num_microseconds().unwrap_or(0) as f64 / 1e6).max(0.0)
+        ((self.last_ts - self.first_ts)
+            .num_microseconds()
+            .unwrap_or(0) as f64
+            / 1e6)
+            .max(0.0)
     }
     pub fn side_confidence(&self) -> f64 {
-        if self.total_value > 0.0 { self.conf_value_sum / self.total_value } else { 0.0 }
+        if self.total_value > 0.0 {
+            self.conf_value_sum / self.total_value
+        } else {
+            0.0
+        }
     }
 
     pub fn accepts(&self, tr: &TradeRec, session: Session, gap_sec: f64, band: f64) -> bool {
         if session != self.session || tr.side != self.side {
             return false;
         }
-        let gap = (tr.ts - self.last_ts).num_microseconds().unwrap_or(i64::MAX).unsigned_abs() as f64 / 1e6;
+        let gap = (tr.ts - self.last_ts)
+            .num_microseconds()
+            .unwrap_or(i64::MAX)
+            .unsigned_abs() as f64
+            / 1e6;
         gap <= gap_sec && (tr.price - self.last_price).abs() <= band + 1e-9
     }
 
@@ -189,7 +215,13 @@ fn key(symbol: &str, side: Side) -> String {
 
 impl GroupBook {
     pub fn new(gap_sec: f64, band_ticks: u32, update_step: f64, keep_trades: usize) -> Self {
-        Self { gap_sec, band_ticks, update_step, keep_trades, active: BTreeMap::new() }
+        Self {
+            gap_sec,
+            band_ticks,
+            update_step,
+            keep_trades,
+            active: BTreeMap::new(),
+        }
     }
 
     pub fn add(
@@ -211,16 +243,17 @@ impl GroupBook {
         }
         let keep = self.keep_trades;
         let step = self.update_step;
-        let g = self
-            .active
-            .entry(k)
-            .or_insert_with(|| ParentGroup::start(symbol, &tr, session, open_threshold, baseline_cold));
+        let g = self.active.entry(k).or_insert_with(|| {
+            ParentGroup::start(symbol, &tr, session, open_threshold, baseline_cold)
+        });
         g.add(tr, keep);
         if g.state == GroupState::Pending && g.total_value >= g.open_threshold {
             g.state = GroupState::Open;
             g.last_emitted_value = g.total_value;
             out.push(("open", g.clone()));
-        } else if g.state == GroupState::Open && g.total_value >= g.last_emitted_value * (1.0 + step) {
+        } else if g.state == GroupState::Open
+            && g.total_value >= g.last_emitted_value * (1.0 + step)
+        {
             g.update_count += 1;
             g.last_emitted_value = g.total_value;
             out.push(("update", g.clone()));
@@ -242,7 +275,9 @@ impl GroupBook {
         let keys: Vec<String> = self
             .active
             .iter()
-            .filter(|(_, g)| (now - g.last_ts).num_microseconds().unwrap_or(0) as f64 / 1e6 > idle_sec)
+            .filter(|(_, g)| {
+                (now - g.last_ts).num_microseconds().unwrap_or(0) as f64 / 1e6 > idle_sec
+            })
             .map(|(k, _)| k.clone())
             .collect();
         keys.iter().flat_map(|k| self.close_key(k)).collect()
@@ -288,7 +323,14 @@ mod tests {
         let mut b = book();
         let mut actions = vec![];
         for i in 0..10 {
-            for (a, _) in b.add("AAA", rec(i as f64 * 5.0, 150e6, Side::Buy, 20_000.0), Session::ContinuousAm, 50.0, 500e6, false) {
+            for (a, _) in b.add(
+                "AAA",
+                rec(i as f64 * 5.0, 150e6, Side::Buy, 20_000.0),
+                Session::ContinuousAm,
+                50.0,
+                500e6,
+                false,
+            ) {
                 actions.push(a);
             }
         }
@@ -302,14 +344,58 @@ mod tests {
     #[test]
     fn gap_band_session_and_sides() {
         let mut b = book();
-        b.add("AAA", rec(0.0, 600e6, Side::Buy, 20_000.0), Session::ContinuousAm, 50.0, 500e6, false);
-        let ev = b.add("AAA", rec(31.0, 600e6, Side::Buy, 20_000.0), Session::ContinuousAm, 50.0, 500e6, false);
-        assert_eq!(ev.iter().map(|e| e.0).collect::<Vec<_>>(), vec!["close", "open"]);
-        let ev = b.add("AAA", rec(35.0, 600e6, Side::Buy, 20_200.0), Session::ContinuousAm, 50.0, 500e6, false);
-        assert_eq!(ev.iter().map(|e| e.0).collect::<Vec<_>>(), vec!["close", "open"]);
-        let ev = b.add("AAA", rec(36.0, 600e6, Side::Buy, 20_200.0), Session::ContinuousPm, 50.0, 500e6, false);
-        assert_eq!(ev.iter().map(|e| e.0).collect::<Vec<_>>(), vec!["close", "open"]);
-        let ev = b.add("AAA", rec(37.0, 600e6, Side::Sell, 20_200.0), Session::ContinuousPm, 50.0, 500e6, false);
+        b.add(
+            "AAA",
+            rec(0.0, 600e6, Side::Buy, 20_000.0),
+            Session::ContinuousAm,
+            50.0,
+            500e6,
+            false,
+        );
+        let ev = b.add(
+            "AAA",
+            rec(31.0, 600e6, Side::Buy, 20_000.0),
+            Session::ContinuousAm,
+            50.0,
+            500e6,
+            false,
+        );
+        assert_eq!(
+            ev.iter().map(|e| e.0).collect::<Vec<_>>(),
+            vec!["close", "open"]
+        );
+        let ev = b.add(
+            "AAA",
+            rec(35.0, 600e6, Side::Buy, 20_200.0),
+            Session::ContinuousAm,
+            50.0,
+            500e6,
+            false,
+        );
+        assert_eq!(
+            ev.iter().map(|e| e.0).collect::<Vec<_>>(),
+            vec!["close", "open"]
+        );
+        let ev = b.add(
+            "AAA",
+            rec(36.0, 600e6, Side::Buy, 20_200.0),
+            Session::ContinuousPm,
+            50.0,
+            500e6,
+            false,
+        );
+        assert_eq!(
+            ev.iter().map(|e| e.0).collect::<Vec<_>>(),
+            vec!["close", "open"]
+        );
+        let ev = b.add(
+            "AAA",
+            rec(37.0, 600e6, Side::Sell, 20_200.0),
+            Session::ContinuousPm,
+            50.0,
+            500e6,
+            false,
+        );
         assert_eq!(ev.iter().map(|e| e.0).collect::<Vec<_>>(), vec!["open"]);
         assert_eq!(b.active.len(), 2);
     }
@@ -324,7 +410,11 @@ mod tests {
             let mut trades: Vec<TradeRec> = (0..n)
                 .map(|_| {
                     t += rng.gen_range(0.0..40.0);
-                    let side = if rng.gen_bool(0.5) { Side::Buy } else { Side::Sell };
+                    let side = if rng.gen_bool(0.5) {
+                        Side::Buy
+                    } else {
+                        Side::Sell
+                    };
                     rec(t, rng.gen_range(50e6..2e9), side, 20_000.0)
                 })
                 .collect();
@@ -349,7 +439,10 @@ mod tests {
             }
             let groups: Vec<&ParentGroup> = finished.iter().chain(b.active.values()).collect();
             let total: f64 = groups.iter().map(|g| g.total_value).sum();
-            assert!((total - expected).abs() < 1e-2 * groups.len().max(1) as f64 + 1e-3, "{total} vs {expected}");
+            assert!(
+                (total - expected).abs() < 1e-2 * groups.len().max(1) as f64 + 1e-3,
+                "{total} vs {expected}"
+            );
             for g in groups {
                 let s: f64 = g.trades.iter().map(|t| t.value).sum();
                 assert!((g.total_value - s).abs() < 1e-3);

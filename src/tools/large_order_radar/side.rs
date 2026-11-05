@@ -27,7 +27,11 @@ pub struct Classified {
 
 impl Classified {
     fn new(side: Side, source: SideSource) -> Self {
-        Self { side, source, inside_spread: false }
+        Self {
+            side,
+            source,
+            inside_spread: false,
+        }
     }
     pub fn confidence(&self) -> f64 {
         if self.source == SideSource::QuoteRule && self.inside_spread {
@@ -38,28 +42,42 @@ impl Classified {
     }
 }
 
+/// (best bid, best ask, quote time)
+type QuoteState = (Option<f64>, Option<f64>, DateTime<Utc>);
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SideClassifier {
     pub quote_stale_sec: f64,
-    quotes: HashMap<String, (Option<f64>, Option<f64>, DateTime<Utc>)>,
+    quotes: HashMap<String, QuoteState>,
     last_price: HashMap<String, f64>,
     last_dir: HashMap<String, Side>,
 }
 
 impl SideClassifier {
     pub fn new(quote_stale_sec: f64) -> Self {
-        Self { quote_stale_sec, ..Default::default() }
+        Self {
+            quote_stale_sec,
+            ..Default::default()
+        }
     }
 
     pub fn on_quote(&mut self, q: &Quote) {
-        self.quotes.insert(q.symbol.clone(), (q.best_bid, q.best_ask, q.ts_exchange));
+        self.quotes
+            .insert(q.symbol.clone(), (q.best_bid, q.best_ask, q.ts_exchange));
     }
 
     pub fn classify(&mut self, t: &Tick) -> Classified {
         let result = self.classify_inner(t);
         if let Some(prev) = self.last_price.get(&t.symbol).copied() {
             if t.price != prev {
-                self.last_dir.insert(t.symbol.clone(), if t.price > prev { Side::Buy } else { Side::Sell });
+                self.last_dir.insert(
+                    t.symbol.clone(),
+                    if t.price > prev {
+                        Side::Buy
+                    } else {
+                        Side::Sell
+                    },
+                );
             }
         }
         self.last_price.insert(t.symbol.clone(), t.price);
@@ -75,7 +93,11 @@ impl SideClassifier {
             return Classified::new(Side::Unknown, SideSource::Unknown);
         }
         if let Some((Some(bid), Some(ask), ts)) = self.quotes.get(&t.symbol).copied() {
-            let age = (t.ts_exchange - ts).num_microseconds().unwrap_or(i64::MAX).unsigned_abs() as f64 / 1e6;
+            let age = (t.ts_exchange - ts)
+                .num_microseconds()
+                .unwrap_or(i64::MAX)
+                .unsigned_abs() as f64
+                / 1e6;
             if age <= self.quote_stale_sec && ask >= bid {
                 if t.price >= ask {
                     return Classified::new(Side::Buy, SideSource::QuoteRule);
@@ -85,10 +107,18 @@ impl SideClassifier {
                 }
                 let mid = (bid + ask) / 2.0;
                 if t.price > mid {
-                    return Classified { side: Side::Buy, source: SideSource::QuoteRule, inside_spread: true };
+                    return Classified {
+                        side: Side::Buy,
+                        source: SideSource::QuoteRule,
+                        inside_spread: true,
+                    };
                 }
                 if t.price < mid {
-                    return Classified { side: Side::Sell, source: SideSource::QuoteRule, inside_spread: true };
+                    return Classified {
+                        side: Side::Sell,
+                        source: SideSource::QuoteRule,
+                        inside_spread: true,
+                    };
                 }
             }
         }

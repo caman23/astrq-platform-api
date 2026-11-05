@@ -78,7 +78,12 @@ pub struct T {
 
 impl Default for T {
     fn default() -> Self {
-        Self { ms: 0, session: None, negotiated: false, provider_side: true }
+        Self {
+            ms: 0,
+            session: None,
+            negotiated: false,
+            provider_side: true,
+        }
     }
 }
 
@@ -99,7 +104,11 @@ pub fn tick_opt(sym: &str, hms: &str, price: f64, volume: i64, side: Side, o: T)
         volume,
         value: price * volume as f64,
         side: if o.provider_side { side } else { Side::Unknown },
-        side_source: if o.provider_side { SideSource::Provider } else { SideSource::Unknown },
+        side_source: if o.provider_side {
+            SideSource::Provider
+        } else {
+            SideSource::Unknown
+        },
         session: o.session.unwrap_or(Session::Closed),
         is_negotiated: o.negotiated,
         seq: Some(seq),
@@ -128,7 +137,13 @@ pub fn quote(sym: &str, hms: &str, bid: f64, ask: f64) -> MarketEvent {
 }
 
 pub fn universe() -> Universe {
-    Universe::from_instruments("test", SYMBOLS.iter().map(|s| Instrument::new(s, Some("Test"))).collect())
+    Universe::from_instruments(
+        "test",
+        SYMBOLS
+            .iter()
+            .map(|s| Instrument::new(s, Some("Test")))
+            .collect(),
+    )
 }
 
 pub fn radar_entry() -> ToolEntry {
@@ -188,7 +203,14 @@ fn noise(sym: &str, start: &str, n: usize, every: i64) -> Vec<MarketEvent> {
         .collect()
 }
 
-fn children(sym: &str, start: &str, n: usize, every: i64, value: f64, side: Side) -> Vec<MarketEvent> {
+fn children(
+    sym: &str,
+    start: &str,
+    n: usize,
+    every: i64,
+    value: f64,
+    side: Side,
+) -> Vec<MarketEvent> {
     let t0 = ts(start, 0);
     let mut price = 20_000.0;
     (0..n)
@@ -239,11 +261,37 @@ pub fn lunch_break() -> Vec<MarketEvent> {
 
 pub fn auctions() -> Vec<MarketEvent> {
     reset_seq();
-    let o = |session| T { ms: 999, session: Some(session), negotiated: false, provider_side: false };
+    let o = |session| T {
+        ms: 999,
+        session: Some(session),
+        negotiated: false,
+        provider_side: false,
+    };
     vec![
-        tick_opt("AAA", "09:14:59", 20_000.0, 150_000, Side::Unknown, o(Session::Ato)), // 3B ATO
-        tick_opt("BBB", "09:14:59", 20_000.0, 5_000, Side::Unknown, o(Session::Ato)),   // 100M
-        tick_opt("AAA", "14:44:59", 20_100.0, 200_000, Side::Unknown, o(Session::Atc)), // 4.02B ATC
+        tick_opt(
+            "AAA",
+            "09:14:59",
+            20_000.0,
+            150_000,
+            Side::Unknown,
+            o(Session::Ato),
+        ), // 3B ATO
+        tick_opt(
+            "BBB",
+            "09:14:59",
+            20_000.0,
+            5_000,
+            Side::Unknown,
+            o(Session::Ato),
+        ), // 100M
+        tick_opt(
+            "AAA",
+            "14:44:59",
+            20_100.0,
+            200_000,
+            Side::Unknown,
+            o(Session::Atc),
+        ), // 4.02B ATC
     ]
 }
 
@@ -256,7 +304,11 @@ pub fn putthrough_interleaved() -> Vec<MarketEvent> {
         19_500.0,
         1_000_000,
         Side::Unknown,
-        T { negotiated: true, provider_side: false, ..T::default() },
+        T {
+            negotiated: true,
+            provider_side: false,
+            ..T::default()
+        },
     ));
     sorted(v)
 }
@@ -279,13 +331,25 @@ pub fn inferred_side() -> Vec<MarketEvent> {
     (0..8)
         .map(|i| {
             price += 50.0;
-            let o = T { provider_side: false, ..T::default() };
-            tick_opt("BBB", &format!("10:05:{:02}", i * 5), price, 7_500, Side::Unknown, o)
+            let o = T {
+                provider_side: false,
+                ..T::default()
+            };
+            tick_opt(
+                "BBB",
+                &format!("10:05:{:02}", i * 5),
+                price,
+                7_500,
+                Side::Unknown,
+                o,
+            )
         })
         .collect()
 }
 
-pub fn scenarios() -> Vec<(&'static str, fn() -> Vec<MarketEvent>)> {
+pub type Scenario = (&'static str, fn() -> Vec<MarketEvent>);
+
+pub fn scenarios() -> Vec<Scenario> {
     vec![
         ("single_block", single_block),
         ("split_parent", split_parent),

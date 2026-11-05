@@ -9,7 +9,11 @@ pub struct Thresholds<'a> {
 
 impl Thresholds<'_> {
     pub fn relative_k(&self, b: &Baseline) -> f64 {
-        self.cfg.tier_relative_k.get(&b.liquidity_tier).copied().unwrap_or(self.cfg.relative_k)
+        self.cfg
+            .tier_relative_k
+            .get(&b.liquidity_tier)
+            .copied()
+            .unwrap_or(self.cfg.relative_k)
     }
 
     /// Which "large trade" thresholds this single trade satisfies.
@@ -19,7 +23,10 @@ impl Thresholds<'_> {
             out.push("absolute".to_string());
         }
         if let Some(b) = baseline.filter(|b| b.median_trade_value > 0.0) {
-            let bar = self.cfg.relative_min_value.max(self.relative_k(b) * b.median_trade_value);
+            let bar = self
+                .cfg
+                .relative_min_value
+                .max(self.relative_k(b) * b.median_trade_value);
             if value >= bar {
                 out.push("relative".to_string());
             }
@@ -31,7 +38,13 @@ impl Thresholds<'_> {
     pub fn is_child_candidate(&self, value: f64, baseline: Option<&Baseline>) -> bool {
         match baseline.filter(|b| b.median_trade_value > 0.0) {
             None => value >= self.cfg.child_min_value,
-            Some(b) => value >= self.cfg.child_floor_value.max(self.cfg.child_relative_k * b.median_trade_value),
+            Some(b) => {
+                value
+                    >= self
+                        .cfg
+                        .child_floor_value
+                        .max(self.cfg.child_relative_k * b.median_trade_value)
+            }
         }
     }
 
@@ -40,7 +53,9 @@ impl Thresholds<'_> {
             None => self.cfg.group_open_value,
             Some(b) => {
                 let rel = self.cfg.group_relative_k * b.median_trade_value;
-                self.cfg.abs_threshold_value.max(self.cfg.group_open_value.min(rel))
+                self.cfg
+                    .abs_threshold_value
+                    .max(self.cfg.group_open_value.min(rel))
             }
         }
     }
@@ -48,7 +63,10 @@ impl Thresholds<'_> {
     pub fn auction_value(&self, baseline: Option<&Baseline>) -> f64 {
         match baseline {
             None => self.cfg.auction_min_value,
-            Some(b) => self.cfg.auction_min_value.max(self.cfg.auction_relative_k * b.median_trade_value),
+            Some(b) => self
+                .cfg
+                .auction_min_value
+                .max(self.cfg.auction_relative_k * b.median_trade_value),
         }
     }
 }
@@ -77,7 +95,10 @@ mod tests {
         assert_eq!(th.large_triggers(600e6, None), vec!["absolute"]);
         assert!(th.large_triggers(300e6, None).is_empty());
         assert_eq!(th.large_triggers(250e6, Some(&bl(20e6))), vec!["relative"]);
-        assert_eq!(th.large_triggers(600e6, Some(&bl(20e6))), vec!["absolute", "relative"]);
+        assert_eq!(
+            th.large_triggers(600e6, Some(&bl(20e6))),
+            vec!["absolute", "relative"]
+        );
         assert_eq!(th.group_open_value(None), 1.5e9);
         assert_eq!(th.group_open_value(Some(&bl(5e6))), 500e6);
         assert_eq!(th.group_open_value(Some(&bl(40e6))), 1e9);

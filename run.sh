@@ -9,7 +9,7 @@
 #   ./run.sh --public     chạy kèm Cloudflare Tunnel -> https://radar.astrq.io.vn
 #                         (đổi tên: ASTRQ_PUBLIC_HOST=ten.astrq.io.vn ./run.sh --public)
 #
-# Lần đầu chạy, script tự tạo môi trường Python (.venv) và cài thư viện frontend.
+# Lần đầu chạy, script tự build backend Rust (bản release) và giao diện.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,26 +38,17 @@ warn() { printf '\033[1;33m⚠ %s\033[0m\n' "$*"; }
 die()  { printf '\033[1;31m✖ %s\033[0m\n' "$*" >&2; exit 1; }
 
 # ------------------------------------------------------------------ prerequisites
-command -v python3 >/dev/null || die "Chưa có python3 (cần ≥ 3.12)"
-python3 -c 'import sys; sys.exit(sys.version_info < (3, 12))' \
-  || die "Cần Python ≥ 3.12, máy đang có $(python3 --version)"
+export PATH="$HOME/.cargo/bin:$PATH"
+command -v cargo >/dev/null || die "Chưa có Rust. Cài: curl --proto '=https' -sSf https://sh.rustup.rs | sh"
 command -v node >/dev/null || die "Chưa có Node.js (cần ≥ 20) để build giao diện"
 
-# ------------------------------------------------------------------ backend env
-if [[ ! -x .venv/bin/python ]]; then
-  say "Tạo môi trường Python (.venv)…"
-  python3 -m venv .venv 2>/dev/null || python3 -m venv --without-pip .venv
-fi
-PIP=(.venv/bin/python -m pip)
-if ! .venv/bin/python -m pip --version >/dev/null 2>&1; then
-  PIP=(python3 -m pip --python .venv/bin/python)   # venv tạo không kèm pip
-fi
-STAMP=.venv/.astrq-installed
-if [[ ! -f $STAMP || backend/pyproject.toml -nt $STAMP ]]; then
-  say "Cài thư viện Python…"
-  "${PIP[@]}" install -q -e backend
-  touch "$STAMP"
-  ok "Đã cài backend"
+# ------------------------------------------------------------------ backend (Rust)
+BIN=backend-rs/target/release/astrq
+if [[ ! -x $BIN ]] || \
+   [[ -n "$(find backend-rs/src backend-rs/Cargo.toml backend-rs/Cargo.lock -newer "$BIN" -print -quit)" ]]; then
+  say "Build backend Rust (lần đầu mất vài phút)…"
+  (cd backend-rs && cargo build --release --quiet)
+  ok "Đã build backend"
 fi
 
 # ------------------------------------------------------------------ frontend build
@@ -94,7 +85,7 @@ fi
 
 if [[ $MODE == "check" ]]; then
   say "Kiểm tra kết nối DNSE (30 giây)…"
-  exec .venv/bin/astrq dnse-check --listen 30
+  exec "$BIN" dnse-check --listen 30
 fi
 
 # ------------------------------------------------------------------ market hours hint
@@ -150,4 +141,4 @@ if (( PUBLIC )); then
 fi
 
 say "Radar chạy tại $URL — Ctrl+C để dừng · log: $LOG"
-.venv/bin/astrq serve --port "$PORT" --plain-logs 2>&1 | tee -a "$LOG"
+"$BIN" serve --port "$PORT" --plain-logs 2>&1 | tee -a "$LOG"

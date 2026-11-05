@@ -59,7 +59,11 @@ fn vn_number(x: f64, decimals: usize) -> String {
         }
         grouped.push(ch);
     }
-    let sign = if x < 0.0 && s.chars().any(|c| c.is_ascii_digit() && c != '0') { "-" } else { "" };
+    let sign = if x < 0.0 && s.chars().any(|c| c.is_ascii_digit() && c != '0') {
+        "-"
+    } else {
+        ""
+    };
     match frac {
         Some(f) => format!("{sign}{grouped},{f}"),
         None => format!("{sign}{grouped}"),
@@ -83,7 +87,9 @@ pub fn price(p: f64) -> String {
 }
 
 pub fn hms(ts: DateTime<Utc>) -> String {
-    ts.with_timezone(&Ho_Chi_Minh).format("%H:%M:%S").to_string()
+    ts.with_timezone(&Ho_Chi_Minh)
+        .format("%H:%M:%S")
+        .to_string()
 }
 
 #[cfg(test)]

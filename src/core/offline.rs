@@ -44,7 +44,12 @@ pub async fn run_offline(
     let market_bus = Arc::new(Bus::<MarketEvent>::new("market", 1));
     let signal_bus = Arc::new(Bus::<Signal>::new("signals", 1));
     let mut collector = signal_bus.subscribe("collector", |_| true, Some(10_000_000));
-    let mut ingest = Ingest::new(market_bus, calendar.clone(), universe.clone(), Some(clock.clone()));
+    let mut ingest = Ingest::new(
+        market_bus,
+        calendar.clone(),
+        universe.clone(),
+        Some(clock.clone()),
+    );
 
     let mut runners: BTreeMap<String, Arc<ToolRunner>> = BTreeMap::new();
     let mut order: Vec<String> = Vec::new();
@@ -58,7 +63,13 @@ pub async fn run_offline(
             rules: rules.clone(),
             clock: clock.clone(),
         };
-        let runner = Arc::new(ToolRunner::new(tool, ctx.clone(), entry, signal_bus.clone(), None));
+        let runner = Arc::new(ToolRunner::new(
+            tool,
+            ctx.clone(),
+            entry,
+            signal_bus.clone(),
+            None,
+        ));
         runner.tool.lock().on_start(&ctx);
         order.push(id.clone());
         runners.insert(id, runner);
@@ -70,7 +81,9 @@ pub async fn run_offline(
     let mut last_ts: Option<DateTime<Utc>> = None;
 
     for raw in events {
-        let Some(ev) = ingest.process(raw) else { continue };
+        let Some(ev) = ingest.process(raw) else {
+            continue;
+        };
         let ts = ev.ts_exchange();
         let d = calendar.trading_date(ts);
         if warm && warmed.insert(d) {
@@ -82,8 +95,11 @@ pub async fn run_offline(
             let interval = r.entry.timer_interval_sec;
             let step = Duration::microseconds((interval * 1e6) as i64);
             let nt = next_timer.entry(id.clone()).or_insert_with(|| {
-                let first = ((ts.timestamp_micros() as f64 / 1e6) / interval).floor() * interval + interval;
-                Utc.timestamp_micros((first * 1e6) as i64).single().expect("valid ts")
+                let first =
+                    ((ts.timestamp_micros() as f64 / 1e6) / interval).floor() * interval + interval;
+                Utc.timestamp_micros((first * 1e6) as i64)
+                    .single()
+                    .expect("valid ts")
             });
             while ts >= *nt {
                 r.process_timer(*nt);
@@ -119,5 +135,9 @@ pub async fn run_offline(
     while let Ok(s) = collector.rx.try_recv() {
         signals.push(s);
     }
-    Ok(OfflineResult { signals, ingest_stats: ingest.stats.clone(), runners })
+    Ok(OfflineResult {
+        signals,
+        ingest_stats: ingest.stats.clone(),
+        runners,
+    })
 }

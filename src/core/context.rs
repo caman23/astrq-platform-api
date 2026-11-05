@@ -67,7 +67,11 @@ impl ContextService {
 
     /// Hot-path read. `None` when unknown (caller marks `baseline_cold`).
     pub fn baseline(&self, symbol: &str, d: NaiveDate) -> Option<Baseline> {
-        self.cache.read().get(&(symbol.to_string(), d)).cloned().flatten()
+        self.cache
+            .read()
+            .get(&(symbol.to_string(), d))
+            .cloned()
+            .flatten()
     }
 
     async fn fetch(&self, symbol: &str, d: NaiveDate) -> Option<Baseline> {
@@ -77,7 +81,11 @@ impl ContextService {
                 Ok(b) => return b,
                 Err(e) => {
                     *self.last_warm_error.lock() = Some(format!("{e:#}"));
-                    METRICS.inc("context_errors_total", 1.0, &[("provider", self.provider.name())]);
+                    METRICS.inc(
+                        "context_errors_total",
+                        1.0,
+                        &[("provider", self.provider.name())],
+                    );
                     if attempt == self.max_retries {
                         tracing::warn!("baseline fetch failed for {symbol}: {e:#}");
                         return None;
@@ -115,7 +123,10 @@ impl ContextService {
         if symbols.is_empty() {
             return 0.0;
         }
-        let hits = symbols.iter().filter(|s| self.baseline(s, d).is_some()).count();
+        let hits = symbols
+            .iter()
+            .filter(|s| self.baseline(s, d).is_some())
+            .count();
         hits as f64 / symbols.len() as f64
     }
 }

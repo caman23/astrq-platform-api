@@ -71,7 +71,11 @@ impl SessionCalendar {
 
     /// End of the last configured session window (e.g. 15:00).
     pub fn close_time(&self) -> NaiveTime {
-        self.windows.iter().map(|w| w.end.0).max().unwrap_or(NaiveTime::from_hms_opt(15, 0, 0).unwrap())
+        self.windows
+            .iter()
+            .map(|w| w.end.0)
+            .max()
+            .unwrap_or(NaiveTime::from_hms_opt(15, 0, 0).unwrap())
     }
 
     pub fn next_trading_day(&self, d: NaiveDate) -> NaiveDate {
@@ -88,7 +92,10 @@ mod tests {
     use super::*;
 
     fn vn(h: u32, m: u32, s: u32) -> DateTime<Utc> {
-        chrono_tz::Asia::Ho_Chi_Minh.with_ymd_and_hms(2026, 10, 21, h, m, s).unwrap().with_timezone(&Utc)
+        chrono_tz::Asia::Ho_Chi_Minh
+            .with_ymd_and_hms(2026, 10, 21, h, m, s)
+            .unwrap()
+            .with_timezone(&Utc)
     }
 
     #[test]
@@ -106,11 +113,17 @@ mod tests {
 
     #[test]
     fn weekend_and_holiday() {
-        let cfg = SessionsConfig { holidays: vec![NaiveDate::from_ymd_opt(2026, 10, 21).unwrap()], ..Default::default() };
+        let cfg = SessionsConfig {
+            holidays: vec![NaiveDate::from_ymd_opt(2026, 10, 21).unwrap()],
+            ..Default::default()
+        };
         let cal = SessionCalendar::new(&cfg);
         assert_eq!(cal.session_at(vn(10, 0, 0)), Session::Closed);
         assert!(!cal.is_trading_day(NaiveDate::from_ymd_opt(2026, 10, 24).unwrap()));
-        let relaxed = SessionCalendar::new(&SessionsConfig { enforce_trading_days: false, ..cfg });
+        let relaxed = SessionCalendar::new(&SessionsConfig {
+            enforce_trading_days: false,
+            ..cfg
+        });
         assert_eq!(relaxed.session_at(vn(10, 0, 0)), Session::ContinuousAm);
     }
 }

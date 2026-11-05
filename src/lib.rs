@@ -4,5 +4,7 @@
 //! tool runner, alerts, platform), `providers` (market data + baselines), `tools`
 //! (plugins), `api` (REST + WebSocket).
 
+pub mod api;
 pub mod core;
+pub mod providers;
 pub mod tools;

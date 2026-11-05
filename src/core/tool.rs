@@ -26,7 +26,11 @@ pub struct Subscription {
 
 impl Subscription {
     pub fn new(event_types: &[&'static str]) -> Self {
-        Self { event_types: event_types.iter().copied().collect(), symbols: None, include_negotiated: true }
+        Self {
+            event_types: event_types.iter().copied().collect(),
+            symbols: None,
+            include_negotiated: true,
+        }
     }
 
     pub fn matches(&self, ev: &MarketEvent, universe: &Universe) -> bool {
@@ -100,7 +104,12 @@ pub trait Tool: Send {
         Ok(())
     }
     /// Optional aggregated view over this tool's signals (dashboard).
-    fn view(&self, _signals: &[Signal], _ctx: &ToolContext, _params: &HashMap<String, String>) -> Option<Value> {
+    fn view(
+        &self,
+        _signals: &[Signal],
+        _ctx: &ToolContext,
+        _params: &HashMap<String, String>,
+    ) -> Option<Value> {
         None
     }
     /// Optional end-of-session report (Vietnamese).

@@ -42,7 +42,11 @@ pub struct Bus<T> {
 
 impl<T: Clone + Send + 'static> Bus<T> {
     pub fn new(name: &str, default_capacity: usize) -> Self {
-        Self { name: name.into(), default_capacity: default_capacity.max(1), subs: Mutex::new(Vec::new()) }
+        Self {
+            name: name.into(),
+            default_capacity: default_capacity.max(1),
+            subs: Mutex::new(Vec::new()),
+        }
     }
 
     pub fn publish(&self, item: &T) {
@@ -54,7 +58,11 @@ impl<T: Clone + Send + 'static> Bus<T> {
             }
             if let Err(mpsc::error::TrySendError::Full(_)) = s.tx.try_send(item.clone()) {
                 s.dropped.fetch_add(1, Ordering::Relaxed);
-                METRICS.inc("bus_dropped_total", 1.0, &[("bus", &self.name), ("subscriber", &s.name)]);
+                METRICS.inc(
+                    "bus_dropped_total",
+                    1.0,
+                    &[("bus", &self.name), ("subscriber", &s.name)],
+                );
             }
         }
     }
@@ -67,8 +75,17 @@ impl<T: Clone + Send + 'static> Bus<T> {
     ) -> Subscriber<T> {
         let (tx, rx) = mpsc::channel(capacity.unwrap_or(self.default_capacity).max(1));
         let dropped = Arc::new(AtomicU64::new(0));
-        self.subs.lock().push(Sub { name: name.into(), predicate: Box::new(predicate), tx, dropped: dropped.clone() });
-        Subscriber { name: name.into(), rx, dropped }
+        self.subs.lock().push(Sub {
+            name: name.into(),
+            predicate: Box::new(predicate),
+            tx,
+            dropped: dropped.clone(),
+        });
+        Subscriber {
+            name: name.into(),
+            rx,
+            dropped,
+        }
     }
 
     pub fn subscriber_count(&self) -> usize {

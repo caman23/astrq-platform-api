@@ -33,7 +33,7 @@ first-session checklists in `docs/provider-notes.md`.
 
 ## Quick start
 
-Requirements: Python ≥ 3.12, Node ≥ 20.
+Requirements: Rust (stable, via rustup), Node ≥ 20.
 
 ```bash
 ./run.sh            # one command: installs on first run, builds the UI, runs the feed from .env
@@ -44,7 +44,7 @@ Requirements: Python ≥ 3.12, Node ≥ 20.
 Or step by step:
 
 ```bash
-make install        # venv + backend deps + frontend deps
+make install        # fetch Rust crates + frontend deps
 make up             # build dashboard, run backend + dashboard on http://127.0.0.1:8000
 ```
 
@@ -57,7 +57,7 @@ Other targets:
 | Command | What it does |
 |---|---|
 | `make dev` | backend on :8000 + Vite hot reload on :5173 |
-| `make test` / `make lint` / `make typecheck` / `make check` | tests, ruff, mypy (strict) + tsc |
+| `make test` / `make lint` / `make check` | cargo test · rustfmt + clippy (-D warnings) + tsc |
 | `make simulate` | write a full synthetic trading day to `data/ticks/replay.jsonl` |
 | `make backtest` | run the radar offline over that file and print signal statistics |
 | `make replay` | serve the dashboard from recorded events instead of the synthetic feed |
@@ -91,16 +91,17 @@ subdomains.
 ## Layout
 
 ```
-backend/astrq/
-  core/        models, config, bus, ingest, runner (isolation), registry, alerts,
-               scheduler/platform, sessions, market rules, metrics, recorder, offline harness
-  providers/   synthetic, replay, vendor skeletons (DNSE/SSI)
+backend-rs/src/
+  core/        models, config, bus, ingest, runner (isolation), alerts, platform/scheduler,
+               sessions, market rules, metrics, recorder, R2 remote store, offline harness
+  providers/   DNSE LightSpeed, SSI FastConnect, synthetic, replay, recorded baseline
   tools/       large_order_radar/ (tool #1), tick_counter/ (sample plugin)
-  api/         FastAPI REST + WebSocket, serves frontend/dist
-backend/tests/ unit, property (hypothesis), golden replay scenarios, isolation, API
+  api/         axum REST + WebSocket, serves frontend/dist
+  main.rs      CLI: serve · simulate · backtest · dnse-check · ssi-check · ssi-universe · r2-check
+backend-rs/tests/ golden replay scenarios (parity with v1), isolation, vendors, API
 frontend/      React + Vite + TypeScript radar dashboard
 config/        settings.yaml, universe_vn100.yaml (sample — NOT the official basket)
-docs/          architecture, ADRs, provider notes, open questions, writing-a-tool
+docs/          architecture, ADRs (0006: Rust rewrite), provider notes, writing-a-tool
 ```
 
 ## API

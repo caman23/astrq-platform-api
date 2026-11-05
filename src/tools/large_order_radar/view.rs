@@ -11,12 +11,20 @@ use crate::core::tool::ToolContext;
 use crate::tools::large_order_radar::window::DayTotals;
 
 fn order_from(s: &Signal, prev: Option<&Map<String, Value>>) -> Map<String, Value> {
-    let mut g = s.features.get("group").and_then(Value::as_object).cloned().unwrap_or_default();
+    let mut g = s
+        .features
+        .get("group")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
     let trades = g.remove("trades").unwrap_or_else(|| json!([]));
     let prev_peak = prev.and_then(|p| p["peak_score"].as_f64());
     let peak = prev_peak.map_or(s.score, |p| p.max(s.score));
     let mut peak_sev = s.severity;
-    if let Some(ps) = prev.and_then(|p| p["peak_severity"].as_str()).and_then(Severity::parse) {
+    if let Some(ps) = prev
+        .and_then(|p| p["peak_severity"].as_str())
+        .and_then(Severity::parse)
+    {
         if ps.rank() > peak_sev.rank() {
             peak_sev = ps;
         }
@@ -32,9 +40,23 @@ fn order_from(s: &Signal, prev: Option<&Map<String, Value>>) -> Map<String, Valu
     o.insert("peak_severity".into(), json!(peak_sev.as_str()));
     o.insert("quality_flags".into(), json!(s.quality_flags));
     o.insert("updated_at".into(), json!(s.ts.to_rfc3339()));
-    o.insert("updates".into(), json!(prev.and_then(|p| p["updates"].as_u64()).map_or(1, |u| u + 1)));
-    o.insert("summary_vi".into(), s.features.get("summary_vi").cloned().unwrap_or_else(|| json!([])));
-    o.insert("explanation".into(), serde_json::to_value(&s.explanation).unwrap_or_default());
+    o.insert(
+        "updates".into(),
+        json!(prev
+            .and_then(|p| p["updates"].as_u64())
+            .map_or(1, |u| u + 1)),
+    );
+    o.insert(
+        "summary_vi".into(),
+        s.features
+            .get("summary_vi")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+    );
+    o.insert(
+        "explanation".into(),
+        serde_json::to_value(&s.explanation).unwrap_or_default(),
+    );
     for (k, v) in g {
         o.insert(k, v);
     }
@@ -71,7 +93,10 @@ pub fn build_view(
     days: &BTreeMap<String, DayTotals>,
 ) -> Value {
     let only = params.get("symbol").map(|s| s.to_ascii_uppercase());
-    let with_trades: usize = params.get("orders_with_trades").and_then(|v| v.parse().ok()).unwrap_or(3);
+    let with_trades: usize = params
+        .get("orders_with_trades")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3);
     let mut order_of_symbols: Vec<String> = Vec::new();
     let mut by_sym: HashMap<String, Entry> = HashMap::new();
     for s in signals {
@@ -80,7 +105,14 @@ pub fn build_view(
         }
         let e = by_sym.entry(s.symbol.clone()).or_insert_with(|| {
             order_of_symbols.push(s.symbol.clone());
-            Entry { orders: vec![], by_id: HashMap::new(), sector: None, baseline: None, metrics: json!({}), last_signal_at: String::new() }
+            Entry {
+                orders: vec![],
+                by_id: HashMap::new(),
+                sector: None,
+                baseline: None,
+                metrics: json!({}),
+                last_signal_at: String::new(),
+            }
         });
         let prev = e.by_id.get(&s.correlation_id);
         let o = order_from(s, prev);
@@ -105,7 +137,11 @@ pub fn build_view(
     for sym in order_of_symbols {
         let e = by_sym.remove(&sym).expect("entry");
         let n_orders = e.orders.len();
-        let mut orders: Vec<Map<String, Value>> = e.orders.iter().filter_map(|id| e.by_id.get(id).cloned()).collect();
+        let mut orders: Vec<Map<String, Value>> = e
+            .orders
+            .iter()
+            .filter_map(|id| e.by_id.get(id).cloned())
+            .collect();
         // newest first by last trade time (stable for equal keys, like Python's sort)
         orders.sort_by(|a, b| {
             let ka = a.get("last_at").and_then(Value::as_str).unwrap_or("");
@@ -120,10 +156,20 @@ pub fn build_view(
         }
         // Put-through deals are listed but do not position the symbol on the radar.
         let ranked: Vec<&Map<String, Value>> = {
-            let r: Vec<&Map<String, Value>> = orders.iter().filter(|o| o["kind"] != "block_putthrough").collect();
-            if r.is_empty() { orders.iter().collect() } else { r }
+            let r: Vec<&Map<String, Value>> = orders
+                .iter()
+                .filter(|o| o["kind"] != "block_putthrough")
+                .collect();
+            if r.is_empty() {
+                orders.iter().collect()
+            } else {
+                r
+            }
         };
-        let peak = ranked.iter().map(|o| o["peak_score"].as_f64().unwrap_or(0.0)).fold(f64::MIN, f64::max);
+        let peak = ranked
+            .iter()
+            .map(|o| o["peak_score"].as_f64().unwrap_or(0.0))
+            .fold(f64::MIN, f64::max);
         let sev = ranked
             .iter()
             .filter_map(|o| o["peak_severity"].as_str().and_then(Severity::parse))
@@ -134,9 +180,15 @@ pub fn build_view(
         let num = |k: &str| m.get(k).cloned().unwrap_or(json!(0));
         let (buy, sell) = match day {
             Some(d) => (d.large_buy, d.large_sell),
-            None => (m["day_large_buy"].as_f64().unwrap_or(0.0), m["day_large_sell"].as_f64().unwrap_or(0.0)),
+            None => (
+                m["day_large_buy"].as_f64().unwrap_or(0.0),
+                m["day_large_sell"].as_f64().unwrap_or(0.0),
+            ),
         };
-        let sector = e.sector.clone().unwrap_or_else(|| json!(universe.get(&sym).and_then(|i| i.sector.clone())));
+        let sector = e
+            .sector
+            .clone()
+            .unwrap_or_else(|| json!(universe.get(&sym).and_then(|i| i.sector.clone())));
         out.push(json!({
             "symbol": sym,
             "sector": sector,
@@ -157,7 +209,8 @@ pub fn build_view(
     out.sort_by(|a, b| {
         let sa = a["max_score"].as_f64().unwrap_or(0.0);
         let sb = b["max_score"].as_f64().unwrap_or(0.0);
-        sb.total_cmp(&sa).then_with(|| a["symbol"].as_str().cmp(&b["symbol"].as_str()))
+        sb.total_cmp(&sa)
+            .then_with(|| a["symbol"].as_str().cmp(&b["symbol"].as_str()))
     });
     let trading_date = ctx.calendar.trading_date(ctx.clock.now()).to_string();
     json!({"trading_date": trading_date, "symbols": out})

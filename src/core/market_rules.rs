@@ -25,8 +25,14 @@ impl MarketRules {
     }
 
     pub fn tick_size(&self, price: f64, exchange: &str) -> f64 {
-        let Some(rules) = self.by_exchange.get(&exchange.to_ascii_uppercase()) else { return 10.0 };
-        rules.iter().find(|(bound, _)| price < *bound).map(|r| r.1).unwrap_or_else(|| rules.last().map_or(10.0, |r| r.1))
+        let Some(rules) = self.by_exchange.get(&exchange.to_ascii_uppercase()) else {
+            return 10.0;
+        };
+        rules
+            .iter()
+            .find(|(bound, _)| price < *bound)
+            .map(|r| r.1)
+            .unwrap_or_else(|| rules.last().map_or(10.0, |r| r.1))
     }
 
     pub fn round_to_tick(&self, price: f64, exchange: &str) -> f64 {

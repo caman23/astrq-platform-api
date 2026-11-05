@@ -144,7 +144,14 @@ impl ToolRunner {
                     // A synchronous call cannot be interrupted; its result is kept, but the
                     // overrun counts towards the breaker like a timeout would.
                     self.status.lock().timeouts += 1;
-                    self.failure(site, format!("{site}: took {:.3}s (budget {:.3}s)", elapsed.as_secs_f64(), limit.as_secs_f64()));
+                    self.failure(
+                        site,
+                        format!(
+                            "{site}: took {:.3}s (budget {:.3}s)",
+                            elapsed.as_secs_f64(),
+                            limit.as_secs_f64()
+                        ),
+                    );
                 } else {
                     self.success(site);
                 }
@@ -171,7 +178,8 @@ impl ToolRunner {
     fn success(&self, site: &'static str) {
         let mut b = self.breaker.lock();
         b.consecutive.insert(site, 0);
-        self.status.lock().consecutive_failures = b.consecutive.values().copied().max().unwrap_or(0);
+        self.status.lock().consecutive_failures =
+            b.consecutive.values().copied().max().unwrap_or(0);
     }
 
     fn failure(&self, site: &'static str, msg: String) {
@@ -187,7 +195,8 @@ impl ToolRunner {
         st.consecutive_failures = max;
         METRICS.inc("tool_failures_total", 1.0, &[("tool", &st.tool_id)]);
         if n >= self.entry.max_consecutive_failures {
-            b.until = Some(Instant::now() + Duration::from_secs_f64(self.entry.breaker_cooldown_sec));
+            b.until =
+                Some(Instant::now() + Duration::from_secs_f64(self.entry.breaker_cooldown_sec));
             st.state = "breaker_open".into();
             tracing::error!("tool {}: circuit breaker open ({msg})", st.tool_id);
         }
@@ -221,7 +230,11 @@ impl ToolRunner {
         self.status.lock().signals += signals.len() as u64;
         METRICS.inc("signals_total", signals.len() as f64, &[("tool", &tool_id)]);
         if let Some(t) = ingest_mono {
-            METRICS.observe("tick_to_signal_seconds", t.elapsed().as_secs_f64(), &[("tool", &tool_id)]);
+            METRICS.observe(
+                "tick_to_signal_seconds",
+                t.elapsed().as_secs_f64(),
+                &[("tool", &tool_id)],
+            );
         }
     }
 
@@ -282,7 +295,8 @@ impl ToolRunner {
                 while let Some(ev) = sub.rx.recv().await {
                     me.process_event(&ev);
                     me.lag.store(sub.rx.len(), Ordering::Relaxed);
-                    me.dropped.store(dropped.load(Ordering::Relaxed), Ordering::Relaxed);
+                    me.dropped
+                        .store(dropped.load(Ordering::Relaxed), Ordering::Relaxed);
                 }
             }
         });
@@ -294,7 +308,9 @@ impl ToolRunner {
                 loop {
                     tokio::time::sleep(Duration::from_millis(200)).await;
                     let now = me.ctx.clock.now();
-                    if (now - last).num_milliseconds() as f64 / 1000.0 >= me.entry.timer_interval_sec {
+                    if (now - last).num_milliseconds() as f64 / 1000.0
+                        >= me.entry.timer_interval_sec
+                    {
                         last = now;
                         me.process_timer(now);
                     }
@@ -322,11 +338,16 @@ impl ToolRunner {
     fn snap_paths(&self) -> Option<(PathBuf, PathBuf)> {
         let dir = self.snapshot_dir.as_ref()?;
         let id = self.tool_id();
-        Some((dir.join(format!("{id}.snap")), dir.join(format!("{id}.meta.json"))))
+        Some((
+            dir.join(format!("{id}.snap")),
+            dir.join(format!("{id}.meta.json")),
+        ))
     }
 
     pub fn save_snapshot(&self) {
-        let Some((snap, meta)) = self.snap_paths() else { return };
+        let Some((snap, meta)) = self.snap_paths() else {
+            return;
+        };
         let (data, version) = {
             let t = self.tool.lock();
             (t.snapshot(), t.version().to_string())
@@ -338,7 +359,11 @@ impl ToolRunner {
             let tmp = snap.with_extension("tmp");
             std::fs::write(&tmp, &data)?;
             std::fs::rename(&tmp, &snap)?;
-            std::fs::write(&meta, serde_json::json!({"version": version, "trading_date": today.to_string()}).to_string())
+            std::fs::write(
+                &meta,
+                serde_json::json!({"version": version, "trading_date": today.to_string()})
+                    .to_string(),
+            )
         };
         if let Err(e) = write() {
             tracing::warn!("tool {} snapshot failed: {e}", self.tool_id());
@@ -346,10 +371,19 @@ impl ToolRunner {
     }
 
     fn restore_snapshot(&self) {
-        let Some((snap, meta_path)) = self.snap_paths() else { return };
-        let (Ok(meta), Ok(data)) = (std::fs::read_to_string(&meta_path), std::fs::read(&snap)) else { return };
+        let Some((snap, meta_path)) = self.snap_paths() else {
+            return;
+        };
+        let (Ok(meta), Ok(data)) = (std::fs::read_to_string(&meta_path), std::fs::read(&snap))
+        else {
+            return;
+        };
         let meta: serde_json::Value = serde_json::from_str(&meta).unwrap_or_default();
-        let today = self.ctx.calendar.trading_date(self.ctx.clock.now()).to_string();
+        let today = self
+            .ctx
+            .calendar
+            .trading_date(self.ctx.clock.now())
+            .to_string();
         let mut tool = self.tool.lock();
         if meta["version"] != tool.version() || meta["trading_date"] != today.as_str() {
             tracing::info!("tool {}: ignoring stale snapshot {meta}", tool.id());

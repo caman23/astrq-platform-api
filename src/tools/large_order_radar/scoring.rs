@@ -5,7 +5,14 @@ use crate::core::fmt::py_round;
 use crate::core::models::{Contribution, Severity, Side};
 use crate::tools::large_order_radar::config::RadarConfig;
 
-pub const FACTORS: [&str; 6] = ["value", "relative", "velocity", "concentration", "impact", "side_confidence"];
+pub const FACTORS: [&str; 6] = [
+    "value",
+    "relative",
+    "velocity",
+    "concentration",
+    "impact",
+    "side_confidence",
+];
 
 fn label(f: &str) -> &'static str {
     match f {
@@ -59,33 +66,67 @@ pub fn score(inp: &ScoreInput, cfg: &RadarConfig, factors: Option<&[&str]>) -> S
     match inp.baseline.filter(|b| b.median_trade_value > 0.0) {
         Some(b) => {
             let ratio = inp.total_value / b.median_trade_value;
-            raw.push(("relative", ratio, log_ratio(ratio, 1.0, 500.0), format!("{ratio:.0}× trung vị lệnh")));
+            raw.push((
+                "relative",
+                ratio,
+                log_ratio(ratio, 1.0, 500.0),
+                format!("{ratio:.0}× trung vị lệnh"),
+            ));
         }
         None => raw.push(("relative", 0.0, 0.0, "thiếu baseline".into())),
     }
     let minutes = (inp.duration_sec / 60.0).max(1.0);
     let vpm = inp.total_value / minutes;
-    raw.push(("velocity", vpm, log_ratio(vpm, cfg.abs_threshold_value, 20.0), "giá trị mỗi phút".into()));
+    raw.push((
+        "velocity",
+        vpm,
+        log_ratio(vpm, cfg.abs_threshold_value, 20.0),
+        "giá trị mỗi phút".into(),
+    ));
     raw.push((
         "concentration",
         inp.concentration,
         clamp01(inp.concentration),
         "tỷ trọng lệnh lớn trong giá trị chủ động cùng chiều".into(),
     ));
-    let mv = if inp.first_price != 0.0 { (inp.last_price - inp.first_price) / inp.first_price * 100.0 } else { 0.0 };
+    let mv = if inp.first_price != 0.0 {
+        (inp.last_price - inp.first_price) / inp.first_price * 100.0
+    } else {
+        0.0
+    };
     let direction = match inp.side {
         Side::Buy => 1.0,
         Side::Sell => -1.0,
         Side::Unknown => 0.0,
     };
-    raw.push(("impact", mv, clamp01(direction * mv / 1.0), "1% theo chiều lệnh = tối đa".into()));
-    raw.push(("side_confidence", inp.side_confidence, clamp01(inp.side_confidence), String::new()));
+    raw.push((
+        "impact",
+        mv,
+        clamp01(direction * mv / 1.0),
+        "1% theo chiều lệnh = tối đa".into(),
+    ));
+    raw.push((
+        "side_confidence",
+        inp.side_confidence,
+        clamp01(inp.side_confidence),
+        String::new(),
+    ));
 
-    let active: Vec<&str> = factors.map(|f| f.to_vec()).unwrap_or_else(|| FACTORS.to_vec());
+    let active: Vec<&str> = factors
+        .map(|f| f.to_vec())
+        .unwrap_or_else(|| FACTORS.to_vec());
     let w = &cfg.weights;
     let total_w = {
-        let t: f64 = FACTORS.iter().filter(|f| active.contains(f)).map(|f| w.get(f)).sum();
-        if t == 0.0 { 1.0 } else { t }
+        let t: f64 = FACTORS
+            .iter()
+            .filter(|f| active.contains(f))
+            .map(|f| w.get(f))
+            .sum();
+        if t == 0.0 {
+            1.0
+        } else {
+            t
+        }
     };
     let mut acc = 0.0;
     let mut explanation = Vec::new();
@@ -113,7 +154,11 @@ pub fn score(inp: &ScoreInput, cfg: &RadarConfig, factors: Option<&[&str]>) -> S
     } else {
         Severity::Info
     };
-    ScoreResult { score: s, severity, explanation }
+    ScoreResult {
+        score: s,
+        severity,
+        explanation,
+    }
 }
 
 #[cfg(test)]
@@ -134,7 +179,16 @@ mod tests {
     }
 
     fn inp(value: f64, side: Side, last: f64, b: Option<&Baseline>) -> ScoreInput<'_> {
-        ScoreInput { total_value: value, duration_sec: 120.0, side, first_price: 20_000.0, last_price: last, side_confidence: 1.0, concentration: 0.5, baseline: b }
+        ScoreInput {
+            total_value: value,
+            duration_sec: 120.0,
+            side,
+            first_price: 20_000.0,
+            last_price: last,
+            side_confidence: 1.0,
+            concentration: 0.5,
+            baseline: b,
+        }
     }
 
     #[test]
@@ -144,7 +198,10 @@ mod tests {
         let r = score(&inp(3e9, Side::Buy, 20_100.0, Some(&b)), &cfg, None);
         let sum: f64 = r.explanation.iter().map(|c| c.contribution).sum();
         assert!((sum - r.score).abs() < 0.2 && (0.0..=100.0).contains(&r.score));
-        let s: Vec<f64> = [0.6e9, 1e9, 3e9, 9e9].iter().map(|v| score(&inp(*v, Side::Buy, 20_100.0, Some(&b)), &cfg, None).score).collect();
+        let s: Vec<f64> = [0.6e9, 1e9, 3e9, 9e9]
+            .iter()
+            .map(|v| score(&inp(*v, Side::Buy, 20_100.0, Some(&b)), &cfg, None).score)
+            .collect();
         assert!(s.windows(2).all(|w| w[0] <= w[1]));
     }
 
@@ -156,6 +213,13 @@ mod tests {
         let down = score(&inp(2e9, Side::Sell, 19_800.0, Some(&b)), &cfg, None).score;
         assert!(down > up);
         let cold = score(&inp(2e9, Side::Buy, 20_100.0, None), &cfg, None);
-        assert_eq!(cold.explanation.iter().find(|c| c.factor == "relative").unwrap().contribution, 0.0);
+        assert_eq!(
+            cold.explanation
+                .iter()
+                .find(|c| c.factor == "relative")
+                .unwrap()
+                .contribution,
+            0.0
+        );
     }
 }

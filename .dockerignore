@@ -5,9 +5,5 @@
 data
 **/node_modules
 frontend/dist
-**/__pycache__
-**/.pytest_cache
-**/.mypy_cache
-**/.ruff_cache
-**/.hypothesis
-backend/tests
+backend-rs/target
+backend-rs/tests

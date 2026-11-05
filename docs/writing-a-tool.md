@@ -1,51 +1,78 @@
 # Writing a tool
 
-A tool is a class; no core change is needed. Minimal example (see
-`backend/astrq/tools/tick_counter/` for the full sample):
+A tool is a type that implements `core::tool::Tool`. No core change is needed. The full
+sample is in `backend-rs/src/tools/tick_counter/mod.rs`. A minimal one looks like this:
 
-```python
-from typing import ClassVar
-from pydantic import BaseModel, Field
-from astrq.core.models import MarketEvent, Signal, Tick
-from astrq.core.tool import BaseTool, Subscription, ToolContext
+```rust
+use anyhow::Result;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-class VolumeSpikeConfig(BaseModel):
-    k: float = Field(5.0, description="Spike if minute volume ≥ k × average")
+use crate::core::models::{MarketEvent, Signal};
+use crate::core::tool::{Subscription, Tool, ToolContext, ToolManifest};
 
-class VolumeSpike(BaseTool):
-    id: ClassVar[str] = "volume_spike"
-    version: ClassVar[str] = "0.1.0"
-    name: ClassVar[str] = "Đột biến khối lượng"
-    config_model: ClassVar[type[BaseModel]] = VolumeSpikeConfig
-    signal_kinds: ClassVar[list[str]] = ["volume_spike"]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct VolumeSpikeConfig {
+    /// Spike if minute volume ≥ k × average
+    pub k: f64,
+}
+impl Default for VolumeSpikeConfig {
+    fn default() -> Self { Self { k: 5.0 } }
+}
 
-    def subscriptions(self) -> list[Subscription]:
-        return [Subscription(frozenset({"tick"}), include_negotiated=False)]
+pub struct VolumeSpike { cfg: VolumeSpikeConfig }
 
-    async def on_event(self, event: MarketEvent, ctx: ToolContext) -> list[Signal]:
-        ...  # fast, no blocking I/O; read baselines via ctx.context.baseline(...)
-        return []
+impl VolumeSpike {
+    pub const ID: &'static str = "volume_spike";
+    pub fn from_config(v: &Value) -> Result<Self> {
+        Ok(Self { cfg: serde_json::from_value(v.clone())? })
+    }
+}
+
+impl Tool for VolumeSpike {
+    fn id(&self) -> &'static str { Self::ID }
+    fn version(&self) -> &'static str { "0.1.0" }
+    fn manifest(&self) -> ToolManifest { /* name, description, config schema, signal kinds */ }
+    fn config_json(&self) -> Value { serde_json::to_value(&self.cfg).unwrap_or_default() }
+    fn subscriptions(&self) -> Vec<Subscription> {
+        let mut s = Subscription::new(&["tick"]);
+        s.include_negotiated = false;
+        vec![s]
+    }
+    fn on_event(&mut self, ev: &MarketEvent, ctx: &ToolContext) -> Result<Vec<Signal>> {
+        // fast, no I/O; read baselines via ctx.context
+        Ok(vec![])
+    }
+}
 ```
 
-Register it in `config/settings.yaml`:
+To register the tool:
+
+1. Add `pub mod volume_spike;` to `backend-rs/src/tools/mod.rs`.
+2. Add one arm in `build_tool`.
+3. Enable it in `config/settings.yaml`:
 
 ```yaml
 tools:
   volume_spike:
     enabled: true
-    module: mypkg.volume_spike:VolumeSpike
     config: { k: 6 }
 ```
 
-Rules
+## Rules
 
-- Only consume bus events and `ToolContext`; never call a vendor directly.
-- Use event timestamps or the `now` passed to `on_timer` — never `datetime.now()`.
-- Keep `on_event` fast (default timeout 250 ms; 5 consecutive failures open the breaker).
-- Make `signal_id` / `dedupe_key` deterministic (e.g. `uuid5` of the dedupe key).
-- Put user-facing lines in `features["summary_vi"]` (Vietnamese) — Telegram and the
+- Only consume bus events and `ToolContext`. Never call a vendor directly.
+- Use event timestamps or the `now` passed to `on_timer`. Never use `Utc::now()`.
+- Keep `on_event` fast. The default budget is 250 ms, and 5 consecutive failures (errors
+  or panics) open the breaker.
+- Make `signal_id` and `dedupe_key` deterministic, for example `Uuid::new_v5` of the
+  dedupe key.
+- Put user-facing lines in `features["summary_vi"]` (Vietnamese). Telegram and the
   dashboard render them generically.
-- Implement `snapshot()/restore()` if the tool keeps intraday state.
-- Optional: `view(signals, ctx, params)` for a dashboard view at
-  `/api/tools/<id>/view`, and `daily_summary(ctx)` for the EOD report.
-- Test with `astrq.core.offline.run_offline` (deterministic) and add golden scenarios.
+- Implement `snapshot()`/`restore()` if the tool keeps intraday state.
+- Optional: `view(...)` adds a dashboard view at `/api/tools/<id>/view`, and
+  `daily_summary(ctx)` adds a section to the EOD report.
+- Test with `core::offline::run_offline`, which is deterministic. Add golden scenarios in
+  `backend-rs/tests/scenarios.rs`.

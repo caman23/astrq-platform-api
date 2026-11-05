@@ -29,7 +29,14 @@ fn dedupe_key(ev: &MarketEvent) -> String {
             (Some(seq), _) => format!("tick|{}|{}|seq|{seq}", t.provider, t.symbol),
             (None, Some(r)) => format!("tick|{}|{}|ref|{r}", t.provider, t.symbol),
             // last resort: identical trades in the same timestamp would collapse
-            (None, None) => format!("tick|{}|{}|{}|{}|{}", t.provider, t.symbol, t.ts_exchange.to_rfc3339(), t.price, t.volume),
+            (None, None) => format!(
+                "tick|{}|{}|{}|{}|{}",
+                t.provider,
+                t.symbol,
+                t.ts_exchange.to_rfc3339(),
+                t.price,
+                t.volume
+            ),
         },
         // timestamps may be second-resolution: include the payload, not just the time
         other => {
@@ -42,12 +49,14 @@ fn dedupe_key(ev: &MarketEvent) -> String {
     }
 }
 
+pub type EventHook = Box<dyn Fn(&MarketEvent) + Send + Sync>;
+
 pub struct Ingest {
     pub bus: Arc<Bus<MarketEvent>>,
     pub calendar: Arc<SessionCalendar>,
     pub universe: Arc<RwLock<Universe>>,
     pub clock: Option<Arc<dyn Clock>>,
-    pub on_event: Option<Box<dyn Fn(&MarketEvent) + Send + Sync>>,
+    pub on_event: Option<EventHook>,
     seen: HashSet<String>,
     seen_order: VecDeque<String>,
     cap: usize,
@@ -126,7 +135,10 @@ impl Ingest {
             METRICS.inc("ticks_total", 1.0, &[]);
             METRICS.observe(
                 "feed_latency_seconds",
-                (t.ts_received - t.ts_exchange).num_microseconds().unwrap_or(0) as f64 / 1e6,
+                (t.ts_received - t.ts_exchange)
+                    .num_microseconds()
+                    .unwrap_or(0) as f64
+                    / 1e6,
                 &[],
             );
         }

@@ -8,7 +8,10 @@ use std::sync::LazyLock;
 type Key = (String, Vec<(String, String)>);
 
 fn key(name: &str, labels: &[(&str, &str)]) -> Key {
-    let mut l: Vec<(String, String)> = labels.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let mut l: Vec<(String, String)> = labels
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
     l.sort();
     (name.to_string(), l)
 }
@@ -56,21 +59,32 @@ impl Metrics {
         self.gauges.lock().insert(key(name, labels), value);
     }
     pub fn observe(&self, name: &str, value: f64, labels: &[(&str, &str)]) {
-        self.summaries.lock().entry(key(name, labels)).or_default().observe(value);
+        self.summaries
+            .lock()
+            .entry(key(name, labels))
+            .or_default()
+            .observe(value);
     }
     pub fn counter(&self, name: &str, labels: &[(&str, &str)]) -> f64 {
-        self.counters.lock().get(&key(name, labels)).copied().unwrap_or(0.0)
+        self.counters
+            .lock()
+            .get(&key(name, labels))
+            .copied()
+            .unwrap_or(0.0)
     }
     pub fn summary(&self, name: &str, labels: &[(&str, &str)]) -> Value {
         match self.summaries.lock().get(&key(name, labels)) {
-            Some(s) => json!({"count": s.count, "p50": s.quantile(0.5), "p95": s.quantile(0.95), "max": s.maximum}),
+            Some(s) => {
+                json!({"count": s.count, "p50": s.quantile(0.5), "p95": s.quantile(0.95), "max": s.maximum})
+            }
             None => json!({"count": 0, "p50": 0.0, "p95": 0.0, "max": 0.0}),
         }
     }
 
     pub fn render_prometheus(&self) -> String {
         fn fmt(name: &str, labels: &[(String, String)], extra: Option<String>) -> String {
-            let mut parts: Vec<String> = labels.iter().map(|(k, v)| format!("{k}=\"{v}\"")).collect();
+            let mut parts: Vec<String> =
+                labels.iter().map(|(k, v)| format!("{k}=\"{v}\"")).collect();
             parts.extend(extra);
             if parts.is_empty() {
                 format!("astrq_{name}")
@@ -87,10 +101,22 @@ impl Metrics {
         }
         for ((n, lb), s) in self.summaries.lock().iter() {
             for q in [0.5, 0.95] {
-                lines.push(format!("{} {}", fmt(n, lb, Some(format!("quantile=\"{q}\""))), s.quantile(q)));
+                lines.push(format!(
+                    "{} {}",
+                    fmt(n, lb, Some(format!("quantile=\"{q}\""))),
+                    s.quantile(q)
+                ));
             }
-            lines.push(format!("{} {}", fmt(&format!("{n}_count"), lb, None), s.count));
-            lines.push(format!("{} {}", fmt(&format!("{n}_sum"), lb, None), s.total));
+            lines.push(format!(
+                "{} {}",
+                fmt(&format!("{n}_count"), lb, None),
+                s.count
+            ));
+            lines.push(format!(
+                "{} {}",
+                fmt(&format!("{n}_sum"), lb, None),
+                s.total
+            ));
         }
         lines.join("\n") + "\n"
     }

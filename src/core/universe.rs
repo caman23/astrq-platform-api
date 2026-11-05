@@ -51,10 +51,16 @@ impl Universe {
 
     pub fn from_instruments(name: &str, instruments: Vec<Instrument>) -> Self {
         let order = instruments.iter().map(|i| i.symbol.clone()).collect();
-        let by_symbol = instruments.into_iter().map(|i| (i.symbol.clone(), i)).collect();
+        let by_symbol = instruments
+            .into_iter()
+            .map(|i| (i.symbol.clone(), i))
+            .collect();
         Universe {
             path: PathBuf::from("/dev/null"),
-            meta: UniverseMeta { name: name.into(), ..Default::default() },
+            meta: UniverseMeta {
+                name: name.into(),
+                ..Default::default()
+            },
             order,
             by_symbol,
             mtime: None,
@@ -62,8 +68,10 @@ impl Universe {
     }
 
     fn reload(&mut self) -> Result<()> {
-        let text = std::fs::read_to_string(&self.path).with_context(|| format!("reading {}", self.path.display()))?;
-        let f: UniverseFile = serde_yaml::from_str(&text).with_context(|| format!("parsing {}", self.path.display()))?;
+        let text = std::fs::read_to_string(&self.path)
+            .with_context(|| format!("reading {}", self.path.display()))?;
+        let f: UniverseFile = serde_yaml::from_str(&text)
+            .with_context(|| format!("parsing {}", self.path.display()))?;
         self.order.clear();
         self.by_symbol.clear();
         for mut i in f.instruments {
@@ -74,7 +82,9 @@ impl Universe {
             self.by_symbol.insert(i.symbol.clone(), i);
         }
         self.meta = f.meta;
-        self.mtime = std::fs::metadata(&self.path).and_then(|m| m.modified()).ok();
+        self.mtime = std::fs::metadata(&self.path)
+            .and_then(|m| m.modified())
+            .ok();
         if !self.meta.verified {
             tracing::warn!(
                 "universe {} loaded from {} is NOT verified against the official list",
@@ -82,13 +92,19 @@ impl Universe {
                 self.path.display()
             );
         }
-        tracing::info!("universe {}: {} instruments", self.meta.name, self.order.len());
+        tracing::info!(
+            "universe {}: {} instruments",
+            self.meta.name,
+            self.order.len()
+        );
         Ok(())
     }
 
     /// Reload when the file changed. Returns true if membership changed.
     pub fn maybe_reload(&mut self) -> bool {
-        let Ok(mtime) = std::fs::metadata(&self.path).and_then(|m| m.modified()) else { return false };
+        let Ok(mtime) = std::fs::metadata(&self.path).and_then(|m| m.modified()) else {
+            return false;
+        };
         if Some(mtime) == self.mtime {
             return false;
         }
@@ -120,6 +136,9 @@ impl Universe {
         self.by_symbol.contains_key(symbol)
     }
     pub fn instruments(&self) -> Vec<Instrument> {
-        self.order.iter().filter_map(|s| self.by_symbol.get(s).cloned()).collect()
+        self.order
+            .iter()
+            .filter_map(|s| self.by_symbol.get(s).cloned())
+            .collect()
     }
 }

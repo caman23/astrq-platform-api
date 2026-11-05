@@ -40,7 +40,10 @@ pub struct SymbolWindow {
 
 impl SymbolWindow {
     pub fn new(window_sec: f64) -> Self {
-        Self { window_sec, ..Default::default() }
+        Self {
+            window_sec,
+            ..Default::default()
+        }
     }
 
     fn apply(&mut self, e: &Entry, sign: f64) {
@@ -90,7 +93,11 @@ impl SymbolWindow {
         let total = self.active_buy + self.active_sell;
         let first_price = self.entries.front().map_or(0.0, |e| e.4);
         let last_price = self.entries.back().map_or(0.0, |e| e.4);
-        let span = if self.entries.len() > 1 { self.entries.back().unwrap().0 - self.entries.front().unwrap().0 } else { 0.0 };
+        let span = if self.entries.len() > 1 {
+            self.entries.back().unwrap().0 - self.entries.front().unwrap().0
+        } else {
+            0.0
+        };
         let large = self.large_buy + self.large_sell;
         json!({
             "window_sec": self.window_sec,

@@ -12,7 +12,9 @@ use serde_json::Value;
 use std::path::PathBuf;
 
 fn golden_path(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden").join(format!("{name}.json"))
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/golden")
+        .join(format!("{name}.json"))
 }
 
 #[tokio::test]
@@ -40,8 +42,18 @@ async fn scenarios_match_python_golden_files() {
 #[tokio::test]
 async fn scenarios_are_deterministic() {
     for (name, build) in scenarios() {
-        let a: Vec<String> = run(build()).await.signals.iter().map(|s| serde_json::to_string(s).unwrap()).collect();
-        let b: Vec<String> = run(build()).await.signals.iter().map(|s| serde_json::to_string(s).unwrap()).collect();
+        let a: Vec<String> = run(build())
+            .await
+            .signals
+            .iter()
+            .map(|s| serde_json::to_string(s).unwrap())
+            .collect();
+        let b: Vec<String> = run(build())
+            .await
+            .signals
+            .iter()
+            .map(|s| serde_json::to_string(s).unwrap())
+            .collect();
         assert_eq!(a, b, "{name}");
     }
 }
@@ -49,7 +61,10 @@ async fn scenarios_are_deterministic() {
 #[tokio::test]
 async fn single_block_opens_and_closes() {
     let sig = run(single_block()).await.signals;
-    assert_eq!(sig.iter().map(|s| s.kind.as_str()).collect::<Vec<_>>(), ["block_order_open", "block_order_close"]);
+    assert_eq!(
+        sig.iter().map(|s| s.kind.as_str()).collect::<Vec<_>>(),
+        ["block_order_open", "block_order_close"]
+    );
     let trig = sig[0].features["group"]["triggers"].as_array().unwrap();
     assert_eq!(trig.len(), 2);
 }
@@ -59,27 +74,46 @@ async fn split_parent_is_one_group() {
     let sig = run(split_parent()).await.signals;
     assert_eq!(
         sig.iter().map(|s| s.kind.as_str()).collect::<Vec<_>>(),
-        ["block_order_open", "block_order_update", "block_order_update", "block_order_close"]
+        [
+            "block_order_open",
+            "block_order_update",
+            "block_order_update",
+            "block_order_close"
+        ]
     );
     let close = &sig.last().unwrap().features["group"];
     assert_eq!(close["n_trades"], 12);
     assert!(close["price_change_pct"].as_f64().unwrap() > 0.0);
-    assert!(sig.iter().all(|s| s.correlation_id == sig[0].correlation_id));
+    assert!(sig
+        .iter()
+        .all(|s| s.correlation_id == sig[0].correlation_id));
 }
 
 #[tokio::test]
 async fn reversal_lunch_auction_putthrough() {
     let rev = run(reversal()).await.signals;
-    let opens: Vec<&str> = rev.iter().filter(|s| s.kind == "block_order_open").map(|s| s.side.as_str()).collect();
+    let opens: Vec<&str> = rev
+        .iter()
+        .filter(|s| s.kind == "block_order_open")
+        .map(|s| s.side.as_str())
+        .collect();
     assert_eq!(opens, ["buy", "sell"]);
 
     let lunch = run(lunch_break()).await.signals;
-    let sessions: Vec<&str> =
-        lunch.iter().filter(|s| s.kind == "block_order_open").map(|s| s.features["group"]["session"].as_str().unwrap()).collect();
+    let sessions: Vec<&str> = lunch
+        .iter()
+        .filter(|s| s.kind == "block_order_open")
+        .map(|s| s.features["group"]["session"].as_str().unwrap())
+        .collect();
     assert_eq!(sessions, ["continuous_am", "continuous_pm"]);
 
     let auc = run(auctions()).await.signals;
-    assert_eq!(auc.iter().map(|s| (s.symbol.as_str(), s.kind.as_str())).collect::<Vec<_>>(), [("AAA", "block_auction"), ("AAA", "block_auction")]);
+    assert_eq!(
+        auc.iter()
+            .map(|s| (s.symbol.as_str(), s.kind.as_str()))
+            .collect::<Vec<_>>(),
+        [("AAA", "block_auction"), ("AAA", "block_auction")]
+    );
 
     let pt = run(putthrough_interleaved()).await.signals;
     let p: Vec<_> = pt.iter().filter(|s| s.kind == "block_putthrough").collect();
@@ -97,11 +131,17 @@ async fn duplicates_dropped_late_flagged_and_inferred_side() {
     let res = run(duplicates_and_late()).await;
     assert_eq!(res.ingest_stats.duplicates, 1);
     assert_eq!(res.ingest_stats.late, 1);
-    let close = res.signals.iter().find(|s| s.kind == "block_order_close").unwrap();
+    let close = res
+        .signals
+        .iter()
+        .find(|s| s.kind == "block_order_close")
+        .unwrap();
     assert_eq!(close.features["group"]["n_trades"], 9);
     assert!(close.quality_flags.contains(&"late_ticks".to_string()));
 
     let inf = run(inferred_side()).await.signals;
     assert!(!inf.is_empty() && inf.iter().all(|s| s.side.as_str() == "buy"));
-    assert!(inf.iter().all(|s| s.quality_flags.contains(&"side_inferred".to_string())));
+    assert!(inf
+        .iter()
+        .all(|s| s.quality_flags.contains(&"side_inferred".to_string())));
 }

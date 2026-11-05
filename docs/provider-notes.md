@@ -6,7 +6,7 @@ Connection guide, API Specs, Streaming data); **src** = source of the official
 `ssi-fc-data` 2.2.2 package (PyPI, by SSI, MIT); **live** = observed on real traffic.
 Nothing is marked *live* yet.
 
-## SSI FastConnect Data — implemented (`backend/astrq/providers/ssi/`)
+## SSI FastConnect Data — implemented (`backend-rs/src/providers/ssi/`)
 
 | Item | Status | Value / handling |
 |---|---|---|
@@ -40,10 +40,10 @@ Nothing is marked *live* yet.
 2. Compare 3–5 ticks against the SSI iBoard time & sales: price unit, volume unit, time zone, side.
 3. Copy `sessions_seen` codes into `provider.ssi.session_map` (config/settings.yaml).
 4. Run a full session; check `missed_volume`, `repeat_dropped`, `hub_errors` in the System tab.
-5. Keep a few raw lines from `data/raw/ssi/` as test fixtures (`backend/tests/test_ssi.py`).
+5. Keep a few raw lines from `data/raw/ssi/` as test fixtures (`backend-rs/tests/vendors.rs`).
 6. Update this table: change *assumed/unverified* to *live*.
 
-## DNSE LightSpeed API — implemented (`backend/astrq/providers/dnse/`) — **default choice**
+## DNSE LightSpeed API — implemented (`backend-rs/src/providers/dnse/`) — **default choice**
 
 Sources: **doc** = developers.dnse.com.vn (intro/register_guide, market-data/connect,
 sdk/build_websocket); **sdk** = `dnse` 0.5.0 on PyPI (github.com/dnse-tech). Where the
@@ -75,4 +75,4 @@ docs say does not exist, different field names) **the docs win**.
    `provider.dnse.session_map`; set `price_unit` explicitly once confirmed.
 4. If the subscribe is rejected for too many streams, reduce `provider.dnse.channels`
    (e.g. drop `expected_price.G1`) and report back — sharding across connections is next.
-5. Keep raw lines from `data/raw/dnse/` as fixtures in `backend/tests/test_dnse.py`.
+5. Keep raw lines from `data/raw/dnse/` as fixtures in `backend-rs/tests/vendors.rs`.

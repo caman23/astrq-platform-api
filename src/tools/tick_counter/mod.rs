@@ -33,7 +33,10 @@ impl TickCounter {
 
     pub fn new(mut cfg: TickCounterConfig) -> Self {
         cfg.milestone = cfg.milestone.max(1);
-        Self { cfg, counts: BTreeMap::new() }
+        Self {
+            cfg,
+            counts: BTreeMap::new(),
+        }
     }
 
     pub fn from_config(v: &Value) -> Result<Self> {
@@ -54,8 +57,13 @@ impl Tool for TickCounter {
             version: self.version().into(),
             name: "Đếm tick (tool mẫu)".into(),
             description: "Tool mẫu: đếm số tick theo mã, phát tín hiệu theo mốc.".into(),
-            subscriptions: self.subscriptions().iter().map(Subscription::describe).collect(),
-            config_schema: serde_json::to_value(schemars::schema_for!(TickCounterConfig)).unwrap_or_default(),
+            subscriptions: self
+                .subscriptions()
+                .iter()
+                .map(Subscription::describe)
+                .collect(),
+            config_schema: serde_json::to_value(schemars::schema_for!(TickCounterConfig))
+                .unwrap_or_default(),
             signal_kinds: vec!["tick_count_milestone".into()],
             has_view: false,
         }
@@ -69,16 +77,21 @@ impl Tool for TickCounter {
         vec![s]
     }
     fn on_event(&mut self, ev: &MarketEvent, _ctx: &ToolContext) -> Result<Vec<Signal>> {
-        let Some(t) = ev.as_tick() else { return Ok(vec![]) };
+        let Some(t) = ev.as_tick() else {
+            return Ok(vec![]);
+        };
         let n = self.counts.entry(t.symbol.clone()).or_insert(0);
         *n += 1;
-        if *n % self.cfg.milestone != 0 {
+        if !(*n).is_multiple_of(self.cfg.milestone) {
             return Ok(vec![]);
         }
         let key = format!("{}:{}:{n}", Self::ID, t.symbol);
         let mut features = Map::new();
         features.insert("count".into(), json!(*n));
-        features.insert("summary_vi".into(), json!([format!("{} đạt {n} tick", t.symbol)]));
+        features.insert(
+            "summary_vi".into(),
+            json!([format!("{} đạt {n} tick", t.symbol)]),
+        );
         Ok(vec![Signal {
             signal_id: Uuid::new_v5(&Uuid::NAMESPACE_URL, key.as_bytes()).to_string(),
             tool_id: Self::ID.into(),

@@ -38,7 +38,12 @@ pub struct SimClock {
 
 impl SimClock {
     pub fn new(start: DateTime<Utc>, speed: f64) -> Self {
-        Self { start, speed, mono0: Instant::now(), manual: Mutex::new(start) }
+        Self {
+            start,
+            speed,
+            mono0: Instant::now(),
+            manual: Mutex::new(start),
+        }
     }
 }
 
@@ -71,7 +76,9 @@ pub struct EventClock {
 
 impl EventClock {
     pub fn new(start: Option<DateTime<Utc>>) -> Self {
-        Self { now: Mutex::new(start.unwrap_or(DateTime::<Utc>::UNIX_EPOCH)) }
+        Self {
+            now: Mutex::new(start.unwrap_or(DateTime::<Utc>::UNIX_EPOCH)),
+        }
     }
 }
 

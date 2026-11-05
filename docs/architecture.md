@@ -31,23 +31,25 @@ Large Order Radar for VN100. Design test for every decision: *adding tool #2 or
 ```
 `*` = skeleton / not implemented (see open questions).
 
-## Core components (backend/astrq/core)
+## Core components (backend-rs/src/core)
+
+Rust (tokio + axum) since ADR-0006; module names below keep their v1 roles.
 
 | Module | Responsibility |
 |---|---|
-| `models.py` | Pydantic v2 canonical model: `Instrument`, `Tick`, `Quote`, `ExpectedPrice`, `ForeignFlow`, `Signal`, `Contribution`, `Alert`. All timestamps tz-aware UTC. |
-| `config.py` | YAML + env (`ASTRQ_…__…`) settings, validated at startup. |
-| `sessions.py`, `market_rules.py` | Config-driven session calendar (VN time) and tick-size ladder. |
-| `clock.py` | `WallClock` (live), `SimClock` (accelerated synthetic), `EventClock` (replay). Detection timers use the market clock. |
-| `bus.py` | `InMemoryBus[T]`; publish never blocks, slow subscribers drop and are counted. |
-| `ingest.py` | Validation, dedupe (by seq or content), seq gaps, late ticks, session fill, feed latency. |
-| `tool.py` | Plugin contract (`Tool` protocol, `BaseTool`, `Subscription`, `ToolManifest`, `ToolContext`). |
-| `registry.py` | Loads tools from config `module:Class`, validates their config model. |
-| `runner.py` | Per-tool isolation: timeout per call, per-call-site consecutive failure count, circuit breaker with half-open recovery, periodic snapshot. |
-| `context.py` | Baseline cache; `baseline_cold` when missing. |
-| `alerts.py` | Router + dashboard and Telegram channels (sendMessage / getUpdates commands). |
-| `platform.py` | Wiring, feed reconnect with backoff, scheduler (warm-up, EOD summary, retention, universe reload). |
-| `offline.py` | Deterministic pipeline for tests/backtests (timers driven by event time). |
+| `models.rs` | Serde canonical model: `Instrument`, `Tick`, `Quote`, `ExpectedPrice`, `ForeignFlow`, `Signal`, `Contribution`, `Alert`. All timestamps tz-aware UTC. |
+| `config.rs` | YAML + env (`ASTRQ_…__…`) settings, validated at startup. |
+| `sessions.rs`, `market_rules.rs` | Config-driven session calendar (VN time) and tick-size ladder. |
+| `clock.rs` | `WallClock` (live), `SimClock` (accelerated synthetic), `EventClock` (replay). Detection timers use the market clock. |
+| `bus.rs` | `InMemoryBus[T]`; publish never blocks, slow subscribers drop and are counted. |
+| `ingest.rs` | Validation, dedupe (by seq or content), seq gaps, late ticks, session fill, feed latency. |
+| `tool.rs` | Plugin contract (`Tool` protocol, `BaseTool`, `Subscription`, `ToolManifest`, `ToolContext`). |
+| `tools/mod.rs` | `build_tool`: builds compiled-in tools by id, validates their config. |
+| `runner.rs` | Per-tool isolation: panic capture, time budget per call, per-call-site consecutive failure count, circuit breaker with half-open recovery, periodic snapshot. |
+| `context.rs` | Baseline cache; `baseline_cold` when missing. |
+| `alerts.rs` | Router + dashboard and Telegram channels (sendMessage / getUpdates commands). |
+| `platform.rs` | Wiring, feed reconnect with backoff, scheduler (warm-up, EOD summary, retention, universe reload). |
+| `offline.rs` | Deterministic pipeline for tests/backtests (timers driven by event time). |
 
 ## Large Order Radar (tools/large_order_radar)
 

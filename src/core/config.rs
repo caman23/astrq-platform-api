@@ -147,8 +147,18 @@ pub struct MarketRulesConfig {
 impl Default for MarketRulesConfig {
     fn default() -> Self {
         // TODO(verify): HOSE tick-size ladder; confirm against current regulation.
-        let r = |below, size| TickSizeRule { exchange: "HOSE".into(), below, size };
-        Self { tick_sizes: vec![r(Some(10_000.0), 10.0), r(Some(50_000.0), 50.0), r(None, 100.0)] }
+        let r = |below, size| TickSizeRule {
+            exchange: "HOSE".into(),
+            below,
+            size,
+        };
+        Self {
+            tick_sizes: vec![
+                r(Some(10_000.0), 10.0),
+                r(Some(50_000.0), 50.0),
+                r(None, 100.0),
+            ],
+        }
     }
 }
 
@@ -192,7 +202,10 @@ pub struct ReplayConfig {
 
 impl Default for ReplayConfig {
     fn default() -> Self {
-        Self { path: "data/ticks/replay.jsonl".into(), speed: 1.0 }
+        Self {
+            path: "data/ticks/replay.jsonl".into(),
+            speed: 1.0,
+        }
     }
 }
 
@@ -302,7 +315,10 @@ pub struct UniverseConfig {
 
 impl Default for UniverseConfig {
     fn default() -> Self {
-        Self { file: "config/universe_vn100.yaml".into(), reload_interval_sec: 300.0 }
+        Self {
+            file: "config/universe_vn100.yaml".into(),
+            reload_interval_sec: 300.0,
+        }
     }
 }
 
@@ -596,7 +612,8 @@ impl Settings {
             }
             other => errors.push(format!("unknown provider.kind '{other}'")),
         }
-        if matches!(self.provider.kind.as_str(), "ssi" | "dnse") && self.context.kind == "synthetic" {
+        if matches!(self.provider.kind.as_str(), "ssi" | "dnse") && self.context.kind == "synthetic"
+        {
             errors.push(
                 "context.kind=synthetic only matches the synthetic market; with a real feed set \
                  ASTRQ_CONTEXT__KIND=recorded (or none)"
@@ -606,7 +623,14 @@ impl Settings {
         if errors.is_empty() {
             Ok(())
         } else {
-            bail!("Cấu hình không hợp lệ:\n{}", errors.iter().map(|e| format!("  - {e}")).collect::<Vec<_>>().join("\n"))
+            bail!(
+                "Cấu hình không hợp lệ:\n{}",
+                errors
+                    .iter()
+                    .map(|e| format!("  - {e}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
         }
     }
 }
@@ -648,7 +672,9 @@ fn typed(existing: Option<&Value>, raw: &str) -> Value {
             _ => Value::String(raw.into()),
         },
         Some(Value::Array(_)) => serde_json::from_str(t).unwrap_or_else(|_| loose_list(t)),
-        Some(Value::Object(_)) => serde_json::from_str(t).unwrap_or_else(|_| Value::String(raw.into())),
+        Some(Value::Object(_)) => {
+            serde_json::from_str(t).unwrap_or_else(|_| Value::String(raw.into()))
+        }
         _ if t.starts_with('[') || t.starts_with('{') => {
             serde_json::from_str(t).unwrap_or_else(|_| Value::String(raw.into()))
         }
@@ -683,18 +709,26 @@ fn set_path(root: &mut Value, path: &[String], raw: &str) {
             obj.insert(key.clone(), v);
             return;
         }
-        cur = obj.entry(key.clone()).or_insert_with(|| Value::Object(Map::new()));
+        cur = obj
+            .entry(key.clone())
+            .or_insert_with(|| Value::Object(Map::new()));
     }
 }
 
 /// Apply `ASTRQ_*` variables (already merged: `.env` first, process env last).
 pub fn apply_env(base: &mut Value, vars: &[(String, String)]) {
     for (k, v) in vars {
-        let Some(rest) = k.strip_prefix("ASTRQ_") else { continue };
+        let Some(rest) = k.strip_prefix("ASTRQ_") else {
+            continue;
+        };
         if rest == "CONFIG" {
             continue;
         }
-        let path: Vec<String> = rest.to_ascii_lowercase().split("__").map(String::from).collect();
+        let path: Vec<String> = rest
+            .to_ascii_lowercase()
+            .split("__")
+            .map(String::from)
+            .collect();
         set_path(base, &path, v);
     }
 }
@@ -712,10 +746,15 @@ pub fn settings_from_value(mut base: Value, root: &Path) -> Result<Settings> {
 pub fn load_settings(config_path: Option<&Path>, use_dotenv: bool) -> Result<Settings> {
     let raw = match config_path {
         Some(p) => p.to_path_buf(),
-        None => std::env::var("ASTRQ_CONFIG").map(PathBuf::from).unwrap_or_else(|_| "config/settings.yaml".into()),
+        None => std::env::var("ASTRQ_CONFIG")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| "config/settings.yaml".into()),
     };
     let path = std::path::absolute(&raw).unwrap_or(raw);
-    let parent = path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    let parent = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
     let root = if parent.file_name().is_some_and(|n| n == "config") {
         parent.parent().map(Path::to_path_buf).unwrap_or(parent)
     } else {
@@ -724,8 +763,10 @@ pub fn load_settings(config_path: Option<&Path>, use_dotenv: bool) -> Result<Set
 
     let mut base = serde_json::to_value(Settings::default())?;
     if path.exists() {
-        let text = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-        let yaml: Value = serde_yaml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        let yaml: Value =
+            serde_yaml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         if !yaml.is_null() {
             merge(&mut base, yaml);
         }
@@ -752,7 +793,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("config")).unwrap();
         let cfg = dir.path().join("config/settings.yaml");
-        std::fs::write(&cfg, "provider:\n  synthetic:\n    speed: 10\nlog_level: WARNING\n").unwrap();
+        std::fs::write(
+            &cfg,
+            "provider:\n  synthetic:\n    speed: 10\nlog_level: WARNING\n",
+        )
+        .unwrap();
         std::fs::write(dir.path().join(".env"), env).unwrap();
         (dir, cfg)
     }
@@ -769,9 +814,18 @@ mod tests {
         assert_eq!(s.provider.synthetic.speed, 45.0);
         assert_eq!(s.log_level, "DEBUG");
         assert_eq!(s.alerts.telegram.chat_id.as_deref(), Some("-10042")); // stays a string
-        assert_eq!(s.alerts.telegram.bot_token.as_ref().unwrap().expose(), "123:abc");
-        assert!(!format!("{s:?}").contains("123:abc"), "secret must not be printed");
-        assert_eq!(s.api.frame_ancestors, vec!["'self'", "http://localhost:5500"]);
+        assert_eq!(
+            s.alerts.telegram.bot_token.as_ref().unwrap().expose(),
+            "123:abc"
+        );
+        assert!(
+            !format!("{s:?}").contains("123:abc"),
+            "secret must not be printed"
+        );
+        assert_eq!(
+            s.api.frame_ancestors,
+            vec!["'self'", "http://localhost:5500"]
+        );
         let s2 = load_settings(Some(&cfg), false).unwrap();
         assert_eq!(s2.provider.synthetic.speed, 10.0); // .env ignored
     }
@@ -784,13 +838,21 @@ mod tests {
 
         let mut base = serde_json::to_value(Settings::default()).unwrap();
         apply_env(&mut base, &[("ASTRQ_PROVIDER__KIND".into(), "dnse".into())]);
-        let err = settings_from_value(base.clone(), Path::new(".")).unwrap_err().to_string();
-        assert!(err.contains("DNSE__API_KEY") && err.contains("recorded"), "{err}");
+        let err = settings_from_value(base.clone(), Path::new("."))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("DNSE__API_KEY") && err.contains("recorded"),
+            "{err}"
+        );
         apply_env(
             &mut base,
             &[
                 ("ASTRQ_PROVIDER__DNSE__API_KEY".into(), "k".into()),
-                ("ASTRQ_PROVIDER__DNSE__API_SECRET".into(), "hidden-123".into()),
+                (
+                    "ASTRQ_PROVIDER__DNSE__API_SECRET".into(),
+                    "hidden-123".into(),
+                ),
                 ("ASTRQ_CONTEXT__KIND".into(), "recorded".into()),
             ],
         );

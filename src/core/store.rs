@@ -15,7 +15,12 @@ pub struct SignalStore {
 
 impl SignalStore {
     pub fn new(calendar: SessionCalendar) -> Self {
-        Self { calendar, max_signals: 50_000, trading_date: None, signals: VecDeque::new() }
+        Self {
+            calendar,
+            max_signals: 50_000,
+            trading_date: None,
+            signals: VecDeque::new(),
+        }
     }
 
     pub fn add(&mut self, s: Signal) {
@@ -35,7 +40,11 @@ impl SignalStore {
     }
 
     pub fn by_tool(&self, tool_id: &str) -> Vec<Signal> {
-        self.signals.iter().filter(|s| s.tool_id == tool_id).cloned().collect()
+        self.signals
+            .iter()
+            .filter(|s| s.tool_id == tool_id)
+            .cloned()
+            .collect()
     }
 
     pub fn query(

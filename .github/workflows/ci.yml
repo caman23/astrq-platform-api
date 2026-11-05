@@ -3,14 +3,20 @@ on: [push, pull_request]
 jobs:
   backend:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend-rs
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
-      - run: pip install -e "backend[dev]"
-      - run: cd backend && ruff check astrq tests && ruff format --check astrq tests
-      - run: cd backend && mypy astrq
-      - run: cd backend && pytest -q -p no:logging
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend-rs
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
   frontend:
     runs-on: ubuntu-latest
     steps:
