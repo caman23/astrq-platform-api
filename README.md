@@ -90,6 +90,7 @@ Bot commands: `/status`, `/on <tool>`, `/off <tool>`, `/min <info|notice|alert>`
 | `header` / `legend` | `0` hides it | `1` |
 | `bg` | `transparent` | dark |
 | `click` | `open` (open full dashboard for that symbol in a new tab) · `none` | `open` |
+| `timeline` | `1` shows a slider under the radar to scrub or replay today's session | off |
 
 ### Sector heatmap (second iframe)
 
