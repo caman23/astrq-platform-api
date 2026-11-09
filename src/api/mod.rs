@@ -68,24 +68,25 @@ pub fn router(platform: Arc<Platform>) -> Router {
     let csp = HeaderValue::from_str(&format!("frame-ancestors {frame}"))
         .unwrap_or(HeaderValue::from_static("frame-ancestors 'self'"));
 
-    app.layer(middleware::from_fn_with_state(
-        platform.clone(),
-        origin_secret,
-    ))
-    // Only the configured sites may put the radar in an <iframe> (anti-clickjacking).
-    .layer(SetResponseHeaderLayer::overriding(
-        header::CONTENT_SECURITY_POLICY,
-        csp,
-    ))
-    // Compress JSON (the radar view is large and free hosts meter egress).
-    .layer(CompressionLayer::new())
-    .layer(
-        CorsLayer::new()
-            .allow_origin(AllowOrigin::list(origins))
-            .allow_methods([Method::GET, Method::POST])
-            .allow_headers(tower_http::cors::Any),
-    )
-    .with_state(platform)
+    app.layer(middleware::from_fn(static_cache_headers))
+        .layer(middleware::from_fn_with_state(
+            platform.clone(),
+            origin_secret,
+        ))
+        // Only the configured sites may put the radar in an <iframe> (anti-clickjacking).
+        .layer(SetResponseHeaderLayer::overriding(
+            header::CONTENT_SECURITY_POLICY,
+            csp,
+        ))
+        // Compress JSON (the radar view is large and free hosts meter egress).
+        .layer(CompressionLayer::new())
+        .layer(
+            CorsLayer::new()
+                .allow_origin(AllowOrigin::list(origins))
+                .allow_methods([Method::GET, Method::POST])
+                .allow_headers(tower_http::cors::Any),
+        )
+        .with_state(platform)
 }
 
 /// Reject requests that did not come through our Cloudflare domain when
@@ -105,6 +106,31 @@ async fn origin_secret(State(p): State<AppState>, req: Request, next: Next) -> R
         }
     }
     next.run(req).await
+}
+
+/// Browser caching for the dashboard files. Without an explicit header, browsers guess a
+/// lifetime from `Last-Modified` and can keep showing the previous deploy (also inside
+/// iframes on other sites). Pages (`/`, `/embed`, …) must always be revalidated; files in
+/// `/assets/` have a content hash in their name, so they can be cached for a year.
+async fn static_cache_headers(req: Request, next: Next) -> Response {
+    let assets = req.uri().path().starts_with("/assets/");
+    let mut res = next.run(req).await;
+    let h = res.headers_mut();
+    if !h.contains_key(header::CACHE_CONTROL) {
+        let html = h
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.starts_with("text/html"));
+        if assets {
+            h.insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=31536000, immutable"),
+            );
+        } else if html {
+            h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        }
+    }
+    res
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {

@@ -478,3 +478,49 @@ async fn view_follow_through_timeline_and_sectors() {
     platform.stop().await;
     server.abort();
 }
+
+/// Pages are revalidated on every load (a deploy shows up at once, also in iframes on
+/// other sites); hashed assets are cached for a year.
+#[tokio::test(flavor = "multi_thread")]
+async fn dashboard_cache_headers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dist = tmp.path().join("dist");
+    std::fs::create_dir_all(dist.join("assets")).unwrap();
+    std::fs::write(dist.join("index.html"), "<!doctype html><title>t</title>").unwrap();
+    std::fs::write(dist.join("assets/index-abc123.js"), "console.log(1)").unwrap();
+    let mut s = settings(tmp.path());
+    s.api.frontend_dist = dist.to_string_lossy().into_owned();
+    let (base, platform, server) = serve(s).await;
+    let c = reqwest::Client::new();
+    for page in ["/", "/embed", "/embed/sectors"] {
+        let r = c.get(format!("{base}{page}")).send().await.unwrap();
+        assert_eq!(r.status(), 200, "{page}");
+        assert_eq!(r.headers()["cache-control"], "no-cache", "{page}");
+    }
+    let r = c
+        .get(format!("{base}/assets/index-abc123.js"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.headers()["cache-control"],
+        "public, max-age=31536000, immutable"
+    );
+    // API responses keep their own policy
+    let r = c
+        .get(format!("{base}/api/tools/large_order_radar/view"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.headers()["cache-control"], "no-cache");
+    assert!(c
+        .get(format!("{base}/health"))
+        .send()
+        .await
+        .unwrap()
+        .headers()
+        .get("cache-control")
+        .is_none());
+    platform.stop().await;
+    server.abort();
+}
