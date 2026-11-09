@@ -3,15 +3,22 @@
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, Request, State};
-use axum::http::{header, HeaderValue, Method, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use axum::Extension;
 use axum::{Json, Router};
+use bytes::Bytes;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::io::Write;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::broadcast::error::RecvError;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -38,7 +45,8 @@ pub fn router(platform: Arc<Platform>) -> Router {
         .route("/api/tools", get(tools))
         .route("/api/tools/{id}/enabled", post(set_enabled))
         .route("/api/tools/{id}/view", get(tool_view))
-        .route("/ws", get(ws));
+        .route("/ws", get(ws))
+        .layer(Extension(Arc::new(ResponseCache::default())));
 
     let dist = s.path(&s.api.frontend_dist);
     if dist.join("index.html").exists() {
@@ -135,7 +143,12 @@ struct SignalQuery {
     limit: Option<usize>,
 }
 
-async fn signals(State(p): State<AppState>, Query(q): Query<SignalQuery>) -> Response {
+async fn signals(
+    State(p): State<AppState>,
+    Extension(cache): Extension<Arc<ResponseCache>>,
+    Query(q): Query<SignalQuery>,
+    headers: HeaderMap,
+) -> Response {
     let limit = q.limit.unwrap_or(200);
     if limit > 2000 {
         return (
@@ -157,14 +170,34 @@ async fn signals(State(p): State<AppState>, Query(q): Query<SignalQuery>) -> Res
             }
         },
     };
-    let rows = p.store.lock().query(
-        q.tool_id.as_deref(),
-        q.symbol.as_deref(),
-        q.side.as_deref(),
-        min,
-        limit,
+    let key = format!(
+        "signals?tool_id={:?}&symbol={:?}&side={:?}&min={:?}&limit={limit}",
+        q.tool_id,
+        q.symbol,
+        q.side,
+        min.map(|m| m.as_str())
     );
-    Json(rows).into_response()
+    let p2 = p.clone();
+    let built = cache
+        .get_or_build(&p, key, move || {
+            let (version, rows) = {
+                let st = p2.store.lock();
+                let rows = st.query(
+                    q.tool_id.as_deref(),
+                    q.symbol.as_deref(),
+                    q.side.as_deref(),
+                    min,
+                    limit,
+                );
+                (st.version, rows)
+            };
+            Some((version, serde_json::to_vec(&rows).ok()?))
+        })
+        .await;
+    match built {
+        Some(v) => cached_response(&v, &headers),
+        None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 async fn alerts(State(p): State<AppState>) -> Json<Value> {
@@ -174,6 +207,117 @@ async fn alerts(State(p): State<AppState>) -> Json<Value> {
 
 async fn summary(State(p): State<AppState>) -> Json<Value> {
     Json(json!({"text": *p.last_summary.lock()}))
+}
+
+// ------------------------------------------------------------------ response cache
+
+/// A rendered JSON response, shared by every viewer that asks for the same thing while
+/// the data is unchanged: serialized and gzip-compressed once.
+struct Cached {
+    version: u64,
+    built: Instant,
+    etag: HeaderValue,
+    raw: Bytes,
+    gzip: Bytes,
+}
+
+impl Cached {
+    fn encode(version: u64, raw: Vec<u8>) -> Option<Self> {
+        // compressed once per data version, so spend the CPU for a smaller download
+        let mut gz = GzEncoder::new(Vec::with_capacity(raw.len() / 6), Compression::default());
+        gz.write_all(&raw).ok()?;
+        let gzip = gz.finish().ok()?;
+        let mut h = std::hash::DefaultHasher::new();
+        raw.hash(&mut h);
+        Some(Self {
+            version,
+            built: Instant::now(),
+            etag: HeaderValue::from_str(&format!("\"{:016x}\"", h.finish())).ok()?,
+            raw: raw.into(),
+            gzip: gzip.into(),
+        })
+    }
+
+    fn size(&self) -> usize {
+        self.raw.len() + self.gzip.len()
+    }
+}
+
+/// Dashboards and iframes re-fetch the radar view after every signal, so N viewers would
+/// otherwise rebuild the same JSON N times. Entries are keyed by path + normalized query
+/// and reused while the signal store is unchanged — and for at most `CACHE_MAX_AGE`, so
+/// day totals that move without a new signal still show up. Concurrent misses build once.
+#[derive(Default)]
+struct ResponseCache {
+    entries: parking_lot::Mutex<(HashMap<String, Arc<Cached>>, usize)>,
+    build: tokio::sync::Mutex<()>,
+}
+
+const CACHE_MAX_AGE: Duration = Duration::from_secs(2);
+/// Memory bound (free hosts have 512 MB); arbitrary query values cannot grow it further.
+const CACHE_MAX_BYTES: usize = 32 << 20;
+const VIEW_PARAMS: [&str; 5] = ["symbol", "full", "orders", "orders_with_trades", "trades"];
+
+impl ResponseCache {
+    fn fresh(&self, key: &str, version: u64) -> Option<Arc<Cached>> {
+        self.entries
+            .lock()
+            .0
+            .get(key)
+            .filter(|c| c.version == version && c.built.elapsed() < CACHE_MAX_AGE)
+            .cloned()
+    }
+
+    fn put(&self, key: String, v: Arc<Cached>) {
+        let mut guard = self.entries.lock();
+        let (map, bytes) = &mut *guard;
+        if let Some(old) = map.remove(&key) {
+            *bytes -= old.size();
+        }
+        if *bytes + v.size() > CACHE_MAX_BYTES {
+            map.clear();
+            *bytes = 0;
+        }
+        *bytes += v.size();
+        map.insert(key, v);
+    }
+
+    /// Serve `key` from the cache, or run `build` (on a blocking thread) once for all
+    /// concurrent callers. `build` returns the data version it rendered and the JSON.
+    async fn get_or_build<F>(&self, p: &Platform, key: String, build: F) -> Option<Arc<Cached>>
+    where
+        F: FnOnce() -> Option<(u64, Vec<u8>)> + Send + 'static,
+    {
+        let version = p.store.lock().version;
+        if let Some(v) = self.fresh(&key, version) {
+            return Some(v);
+        }
+        let _one_builder = self.build.lock().await;
+        let version = p.store.lock().version; // may have moved while we waited
+        if let Some(v) = self.fresh(&key, version) {
+            return Some(v);
+        }
+        let built = tokio::task::spawn_blocking(move || {
+            let (version, raw) = build()?;
+            Cached::encode(version, raw)
+        })
+        .await
+        .ok()
+        .flatten()?;
+        let built = Arc::new(built);
+        self.put(key, built.clone());
+        Some(built)
+    }
+}
+
+fn render_view(p: &Platform, id: &str, params: &HashMap<String, String>) -> Option<(u64, Vec<u8>)> {
+    let r = p.runners.get(id)?;
+    let (version, signals) = {
+        let st = p.store.lock();
+        (st.version, st.by_tool(id))
+    };
+    let view = r.tool.lock().view(&signals, &r.ctx, params)?;
+    Some((version, serde_json::to_vec(&view).ok()?))
 }
 
 async fn tools(State(p): State<AppState>) -> Json<Value> {
@@ -221,25 +365,67 @@ async fn set_enabled(
 
 async fn tool_view(
     State(p): State<AppState>,
+    Extension(cache): Extension<Arc<ResponseCache>>,
     Path(id): Path<String>,
     Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
 ) -> Response {
-    let Some(r) = p.runners.get(&id) else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"detail": "unknown tool"})),
-        )
-            .into_response();
-    };
-    let signals = p.store.lock().by_tool(&id);
-    let view = r.tool.lock().view(&signals, &r.ctx, &params);
-    match view {
-        Some(v) => Json(v).into_response(),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"detail": "tool has no view"})),
-        )
-            .into_response(),
+    let not_found =
+        |detail: &str| (StatusCode::NOT_FOUND, Json(json!({ "detail": detail }))).into_response();
+    if !p.runners.contains_key(&id) {
+        return not_found("unknown tool");
+    }
+    // Only known parameters take part in the key, so random query strings cannot
+    // fill the cache or bypass it.
+    let mut params = params;
+    params.retain(|k, _| VIEW_PARAMS.contains(&k.as_str()));
+    if let Some(sym) = params.get_mut("symbol") {
+        *sym = sym.to_ascii_uppercase();
+    }
+    let mut parts: Vec<String> = params.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    parts.sort();
+    let key = format!("{id}?{}", parts.join("&"));
+
+    let (p2, params2) = (p.clone(), params);
+    let built = cache
+        .get_or_build(&p, key, move || render_view(&p2, &id, &params2))
+        .await;
+    match built {
+        Some(v) => cached_response(&v, &headers),
+        None => not_found("tool has no view"),
+    }
+}
+
+fn cached_response(v: &Cached, req: &HeaderMap) -> Response {
+    let mut h = HeaderMap::new();
+    h.insert(header::ETAG, v.etag.clone());
+    // always revalidate; an unchanged view then costs a 304 with no body
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    h.insert(header::VARY, HeaderValue::from_static("accept-encoding"));
+    let matches = req
+        .get(header::IF_NONE_MATCH)
+        .and_then(|x| x.to_str().ok())
+        .is_some_and(|x| {
+            x.split(',')
+                .any(|t| t.trim() == v.etag.to_str().unwrap_or(""))
+        });
+    if matches {
+        return (StatusCode::NOT_MODIFIED, h).into_response();
+    }
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    let gzip_ok = req
+        .get(header::ACCEPT_ENCODING)
+        .and_then(|x| x.to_str().ok())
+        .is_some_and(|x| x.split(',').any(|e| e.trim().starts_with("gzip")));
+    if gzip_ok {
+        // already compressed: CompressionLayer leaves responses with Content-Encoding alone
+        h.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        (h, v.gzip.clone()).into_response()
+    } else {
+        (h, v.raw.clone()).into_response()
     }
 }
 
@@ -257,7 +443,7 @@ async fn ws_session(p: AppState, mut socket: WebSocket) {
         tokio::select! {
             msg = rx.recv() => match msg {
                 Ok(text) => {
-                    if socket.send(Message::Text(text.to_string().into())).await.is_err() {
+                    if socket.send(Message::Text(text)).await.is_err() {
                         break;
                     }
                 }

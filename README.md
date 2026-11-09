@@ -111,7 +111,7 @@ docs/          architecture, ADRs (0006: Rust rewrite), provider notes, writing-
 | `GET /health`, `GET /ready`, `GET /metrics` | liveness, readiness, Prometheus text |
 | `GET /api/status` | clock, session, feed status, tick rate, feed vs internal latency, tools |
 | `GET /api/tools` · `POST /api/tools/{id}/enabled` | manifests/config/status · enable/disable |
-| `GET /api/tools/large_order_radar/view[?symbol=X]` | aggregated radar view (today) |
+| `GET /api/tools/large_order_radar/view` | radar overview for today: newest 5 orders per symbol, last 8 trades of the newest one (`?symbol=X`: everything for X · `?full=1`: v1 document with 30 orders and score breakdowns) |
 | `GET /api/signals?symbol=&side=&min_severity=&limit=` | today's signals |
 | `WS /ws` | `hello`, `status` (1 s), `signal`, `alert`, `summary` messages |
 

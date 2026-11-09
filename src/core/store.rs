@@ -2,6 +2,7 @@
 
 use chrono::NaiveDate;
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use crate::core::models::{Severity, Signal};
 use crate::core::sessions::SessionCalendar;
@@ -10,7 +11,10 @@ pub struct SignalStore {
     calendar: SessionCalendar,
     max_signals: usize,
     pub trading_date: Option<NaiveDate>,
-    pub signals: VecDeque<Signal>,
+    /// Shared, immutable signals: readers (API views) clone the `Arc`, never the data.
+    pub signals: VecDeque<Arc<Signal>>,
+    /// Bumped on every change; API caches are keyed by it.
+    pub version: u64,
 }
 
 impl SignalStore {
@@ -20,6 +24,7 @@ impl SignalStore {
             max_signals: 50_000,
             trading_date: None,
             signals: VecDeque::new(),
+            version: 0,
         }
     }
 
@@ -31,15 +36,17 @@ impl SignalStore {
             _ => {
                 self.trading_date = Some(d);
                 self.signals.clear();
+                self.version += 1;
             }
         }
         if self.signals.len() == self.max_signals {
             self.signals.pop_front();
         }
-        self.signals.push_back(s);
+        self.signals.push_back(Arc::new(s));
+        self.version += 1;
     }
 
-    pub fn by_tool(&self, tool_id: &str) -> Vec<Signal> {
+    pub fn by_tool(&self, tool_id: &str) -> Vec<Arc<Signal>> {
         self.signals
             .iter()
             .filter(|s| s.tool_id == tool_id)
@@ -54,7 +61,7 @@ impl SignalStore {
         side: Option<&str>,
         min_severity: Option<Severity>,
         limit: usize,
-    ) -> Vec<Signal> {
+    ) -> Vec<Arc<Signal>> {
         self.signals
             .iter()
             .rev()

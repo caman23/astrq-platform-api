@@ -13,6 +13,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::core::context::Baseline;
@@ -608,7 +609,7 @@ impl Tool for LargeOrderRadar {
 
     fn view(
         &self,
-        signals: &[Signal],
+        signals: &[Arc<Signal>],
         ctx: &ToolContext,
         params: &HashMap<String, String>,
     ) -> Option<Value> {

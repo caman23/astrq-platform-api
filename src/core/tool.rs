@@ -106,7 +106,7 @@ pub trait Tool: Send {
     /// Optional aggregated view over this tool's signals (dashboard).
     fn view(
         &self,
-        _signals: &[Signal],
+        _signals: &[Arc<Signal>],
         _ctx: &ToolContext,
         _params: &HashMap<String, String>,
     ) -> Option<Value> {

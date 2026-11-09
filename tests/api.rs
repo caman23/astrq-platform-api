@@ -232,3 +232,138 @@ async fn origin_secret_and_tool_lock() {
     server.abort();
     platform.stop().await;
 }
+
+/// The radar view is rendered once per data version and shared by every viewer:
+/// ETag/304 revalidation, a pre-compressed gzip body, and a compact default overview.
+#[tokio::test(flavor = "multi_thread")]
+async fn view_cache_and_compact_overview() {
+    use std::io::Read;
+    let tmp = tempfile::tempdir().unwrap();
+    let (base, platform, server) = serve(settings(tmp.path())).await;
+    let c = reqwest::Client::new();
+    let url = format!("{base}/api/tools/large_order_radar/view");
+
+    let deadline = Instant::now() + Duration::from_secs(25);
+    loop {
+        let v: Value = c.get(&url).send().await.unwrap().json().await.unwrap();
+        let n_orders: usize = v["symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["orders"].as_array().unwrap().len())
+            .sum();
+        if n_orders >= 20 || Instant::now() > deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    // Freeze the data. Events already queued at stop() are still applied and move day
+    // totals without a new signal (the cache's max age exists for exactly that), so
+    // wait until two renderings past the max age agree.
+    platform.stop().await;
+    let mut last = String::new();
+    loop {
+        let r = c.get(&url).send().await.unwrap();
+        let tag = r.headers()["etag"].to_str().unwrap().to_string();
+        if tag == last {
+            break;
+        }
+        last = tag;
+        tokio::time::sleep(Duration::from_millis(2100)).await;
+    }
+
+    let r = c.get(&url).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(r.headers()["cache-control"], "no-cache");
+    let etag = r.headers()["etag"].to_str().unwrap().to_string();
+    let raw = r.bytes().await.unwrap();
+    let compact: Value = serde_json::from_slice(&raw).unwrap();
+
+    // revalidation: unchanged data costs a 304 without a body (also after VIEW_MAX_AGE)
+    for wait in [0, 2100] {
+        tokio::time::sleep(Duration::from_millis(wait)).await;
+        let r = c
+            .get(&url)
+            .header("If-None-Match", &etag)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 304, "after {wait} ms");
+        assert!(r.bytes().await.unwrap().is_empty());
+    }
+
+    // unknown query parameters neither split nor bypass the cache
+    let r = c.get(format!("{url}?cachebust=123")).send().await.unwrap();
+    assert_eq!(r.headers()["etag"].to_str().unwrap(), etag);
+
+    // gzip: served pre-compressed, same document
+    let r = c
+        .get(&url)
+        .header("Accept-Encoding", "gzip, deflate, br")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.headers()["content-encoding"], "gzip");
+    let gz = r.bytes().await.unwrap();
+    assert!(gz.len() * 3 < raw.len(), "gzip should be much smaller");
+    let mut unzipped = Vec::new();
+    flate2::read::GzDecoder::new(&gz[..])
+        .read_to_end(&mut unzipped)
+        .unwrap();
+    assert_eq!(unzipped, raw);
+
+    // many viewers at once: all get the same rendering
+    let tags = futures_util::future::join_all((0..32).map(|_| c.get(&url).send())).await;
+    for r in tags {
+        let r = r.unwrap();
+        assert_eq!(r.status(), 200);
+        assert_eq!(r.headers()["etag"].to_str().unwrap(), etag);
+    }
+
+    // compact overview = what the radar hover needs; ?full=1 = the v1 document
+    let full: Value = c
+        .get(format!("{url}?full=1"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let syms = |v: &Value| v["symbols"].as_array().unwrap().clone();
+    assert_eq!(syms(&compact).len(), syms(&full).len());
+    for (a, b) in syms(&compact).iter().zip(syms(&full).iter()) {
+        assert_eq!(a["symbol"], b["symbol"]);
+        assert_eq!(a["max_score"], b["max_score"]);
+        assert_eq!(a["n_orders"], b["n_orders"]);
+        assert_eq!(a["day_net_large"], b["day_net_large"]);
+        let (oa, ob) = (
+            a["orders"].as_array().unwrap(),
+            b["orders"].as_array().unwrap(),
+        );
+        assert!(oa.len() <= 5 && oa.len() == ob.len().min(5));
+        for (i, (x, y)) in oa.iter().zip(ob.iter()).enumerate() {
+            assert_eq!(x["id"], y["id"]);
+            assert_eq!(x["peak_score"], y["peak_score"]);
+            assert_eq!(x["explanation"], serde_json::json!([]));
+            let (tx, ty) = (
+                x["trades"].as_array().unwrap(),
+                y["trades"].as_array().unwrap(),
+            );
+            if i == 0 {
+                assert_eq!(tx.len(), ty.len().min(8));
+                assert_eq!(
+                    tx[..],
+                    ty[ty.len() - tx.len()..],
+                    "last trades of the newest order"
+                );
+            } else {
+                assert!(tx.is_empty());
+            }
+        }
+    }
+    assert!(syms(&full)
+        .iter()
+        .flat_map(|s| s["orders"].as_array().unwrap().clone())
+        .any(|o| !o["explanation"].as_array().unwrap().is_empty()));
+    server.abort();
+}

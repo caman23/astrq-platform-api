@@ -3,6 +3,7 @@
 //! (baseline warm-up, EOD summary, retention, universe reload) and remote sync.
 
 use anyhow::{Context, Result};
+use axum::extract::ws::Utf8Bytes;
 use chrono::{NaiveDate, Utc};
 use parking_lot::{Mutex, RwLock};
 use serde_json::{json, Value};
@@ -53,7 +54,9 @@ pub struct Platform {
     pub router: Arc<AlertRouter>,
     pub telegram: Option<Arc<TelegramChannel>>,
     /// WebSocket fan-out (serialized JSON messages).
-    pub listeners: broadcast::Sender<Arc<str>>,
+    /// Dashboard fan-out: each message is serialized once; `Utf8Bytes` clones are
+    /// reference-counted, so every WebSocket client shares the same buffer.
+    pub listeners: broadcast::Sender<Utf8Bytes>,
     pub provider_name: &'static str,
     pub provider_status: StatusHandle,
     provider: tokio::sync::Mutex<Option<Box<dyn MarketDataProvider>>>,
@@ -73,9 +76,9 @@ pub struct Platform {
     jobs_done: Mutex<HashMap<&'static str, NaiveDate>>,
 }
 
-fn notify(tx: &broadcast::Sender<Arc<str>>, v: Value) {
+fn notify(tx: &broadcast::Sender<Utf8Bytes>, v: Value) {
     if tx.receiver_count() > 0 {
-        let _ = tx.send(Arc::from(v.to_string()));
+        let _ = tx.send(Utf8Bytes::from(v.to_string()));
     }
 }
 

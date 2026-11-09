@@ -71,6 +71,19 @@ symbol's last signal ages. Hover → order details with child trades; click → 
 drawer with the full history and score breakdown. Side panel: live signal feed,
 VN100 ranking table (net large / score), system health and tool toggles.
 
+### Serving many viewers
+
+Every dashboard and iframe re-fetches the radar view after each radar signal. The API
+renders each view (and `/api/signals` query) **once per signal-store version**: the JSON
+is serialized and gzip-compressed once, shared by all viewers, revalidated with
+`ETag`/`304 Not Modified`, and rebuilt at most every 2 s even without a new signal (day
+totals can move without one). Concurrent misses wait for a single build. The store holds
+`Arc<Signal>`, so readers never deep-copy signals, and WebSocket clients share one
+message buffer per broadcast. Measured locally on a full synthetic day (20 concurrent
+clients): view 16 → 120,000 req/s, p50 1.4 s → 0.14 ms, 138 KB → 44 KB per download;
+radar tick-to-signal p95 unchanged (~0.7 ms) under that load.
+`cargo run --release --example loadtest` and `--example viewbench` reproduce this.
+
 ## Non-functional
 
 - Latency: `feed_latency_seconds` (vendor ts → received) is separated from
