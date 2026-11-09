@@ -16,7 +16,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast::error::RecvError;
@@ -217,7 +217,8 @@ struct Cached {
     version: u64,
     built: Instant,
     etag: HeaderValue,
-    raw: Bytes,
+    /// Only the compressed body is kept (browsers all accept gzip); the rare client
+    /// without gzip gets it inflated on the fly. Keeps many timeline views in memory.
     gzip: Bytes,
 }
 
@@ -233,13 +234,12 @@ impl Cached {
             version,
             built: Instant::now(),
             etag: HeaderValue::from_str(&format!("\"{:016x}\"", h.finish())).ok()?,
-            raw: raw.into(),
             gzip: gzip.into(),
         })
     }
 
     fn size(&self) -> usize {
-        self.raw.len() + self.gzip.len()
+        self.gzip.len()
     }
 }
 
@@ -256,7 +256,15 @@ struct ResponseCache {
 const CACHE_MAX_AGE: Duration = Duration::from_secs(2);
 /// Memory bound (free hosts have 512 MB); arbitrary query values cannot grow it further.
 const CACHE_MAX_BYTES: usize = 32 << 20;
-const VIEW_PARAMS: [&str; 5] = ["symbol", "full", "orders", "orders_with_trades", "trades"];
+const VIEW_PARAMS: [&str; 7] = [
+    "symbol",
+    "full",
+    "orders",
+    "orders_with_trades",
+    "trades",
+    "at",
+    "sectors",
+];
 
 impl ResponseCache {
     fn fresh(&self, key: &str, version: u64) -> Option<Arc<Cached>> {
@@ -379,6 +387,17 @@ async fn tool_view(
     // fill the cache or bypass it.
     let mut params = params;
     params.retain(|k, _| VIEW_PARAMS.contains(&k.as_str()));
+    if let Some(at) = params.get("at") {
+        let ok = chrono::NaiveTime::parse_from_str(at, "%H:%M").is_ok()
+            || chrono::NaiveTime::parse_from_str(at, "%H:%M:%S").is_ok();
+        if !ok {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"detail": "at must be HH:MM or HH:MM:SS (Vietnam time)"})),
+            )
+                .into_response();
+        }
+    }
     if let Some(sym) = params.get_mut("symbol") {
         *sym = sym.to_ascii_uppercase();
     }
@@ -425,7 +444,11 @@ fn cached_response(v: &Cached, req: &HeaderMap) -> Response {
         h.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
         (h, v.gzip.clone()).into_response()
     } else {
-        (h, v.raw.clone()).into_response()
+        let mut raw = Vec::new();
+        match flate2::read::GzDecoder::new(&v.gzip[..]).read_to_end(&mut raw) {
+            Ok(_) => (h, raw).into_response(),
+            Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        }
     }
 }
 

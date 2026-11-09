@@ -349,6 +349,55 @@ pub fn inferred_side() -> Vec<MarketEvent> {
 
 pub type Scenario = (&'static str, fn() -> Vec<MarketEvent>);
 
+/// Large sells (600M) once a minute for 10 minutes while the price holds: absorbed.
+/// With `falling`, each pair of sells pushes the price down a tick: not absorbed.
+pub fn absorption_flow(falling: bool) -> Vec<MarketEvent> {
+    reset_seq();
+    let t0 = ts("10:00:00", 0);
+    // the whole market (noise included) steps down a tick every 2 minutes when falling
+    let level = |sec: i64| {
+        if falling {
+            20_000.0 - 50.0 * ((sec - 60).max(0) / 120) as f64
+        } else {
+            20_000.0
+        }
+    };
+    let mut v: Vec<MarketEvent> = (0..150)
+        .map(|i| {
+            let sec = i * 7;
+            let side = if i % 2 == 1 { Side::Buy } else { Side::Sell };
+            let px = level(sec) + if side == Side::Buy { 50.0 } else { 0.0 };
+            let t = t0 + chrono::Duration::seconds(sec);
+            tick("AAA", &hms_of(t), px, 1000, side)
+        })
+        .collect();
+    for i in 0..10 {
+        let sec = 60 + i * 60;
+        let t = t0 + chrono::Duration::seconds(sec);
+        v.push(tick("AAA", &hms_of(t), level(sec), 30_000, Side::Sell));
+    }
+    sorted(v)
+}
+
+/// Medium buys (~100M, below the 200M large bar) every 90 s for 24 minutes — with
+/// identical sizes (TWAP-like) or with irregular sizes (ordinary flow).
+pub fn stealth_buys(regular: bool) -> Vec<MarketEvent> {
+    reset_seq();
+    let mut v = noise("AAA", "10:00:00", 220, 7);
+    let t0 = ts("10:00:30", 0);
+    let sizes = [2_500, 9_000, 4_100, 15_000, 3_000, 7_700, 12_500, 5_300];
+    for i in 0..16 {
+        let vol = if regular {
+            5_000
+        } else {
+            sizes[i % sizes.len()]
+        };
+        let t = t0 + chrono::Duration::seconds(i as i64 * 90);
+        v.push(tick("AAA", &hms_of(t), 20_050.0, vol, Side::Buy));
+    }
+    sorted(v)
+}
+
 pub fn scenarios() -> Vec<Scenario> {
     vec![
         ("single_block", single_block),

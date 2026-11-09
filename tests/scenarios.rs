@@ -145,3 +145,78 @@ async fn duplicates_dropped_late_flagged_and_inferred_side() {
         .iter()
         .all(|s| s.quality_flags.contains(&"side_inferred".to_string())));
 }
+
+// ---------------------------------------------------------------- flow detectors (v1.1)
+
+fn kinds(sig: &[astrq::core::models::Signal]) -> Vec<&str> {
+    sig.iter().map(|s| s.kind.as_str()).collect()
+}
+
+#[tokio::test]
+async fn absorption_end_to_end() {
+    let sig = run(absorption_flow(false)).await.signals;
+    let abs: Vec<_> = sig.iter().filter(|s| s.kind == "absorption").collect();
+    assert!(!abs.is_empty(), "{:?}", kinds(&sig));
+    let states: Vec<&str> = abs.iter().map(|s| s.state.as_str()).collect();
+    assert_eq!(states[0], "open");
+    assert!(states[1..].iter().all(|s| *s == "update"), "{states:?}");
+    assert!(
+        abs.iter()
+            .all(|s| s.correlation_id == abs[0].correlation_id),
+        "one episode"
+    );
+    let a = abs[0];
+    assert_eq!(a.side.as_str(), "buy", "sells absorbed by a buyer");
+    let g = &a.features["group"];
+    assert!(g["flow_share"].as_f64().unwrap() >= 0.7);
+    assert!(g["n_trades"].as_u64().unwrap() >= 5);
+    let sum: f64 = a.explanation.iter().map(|c| c.contribution).sum();
+    assert!(
+        (sum - a.score).abs() < 0.2,
+        "explanation adds up to the score"
+    );
+    assert!(a.features["summary_vi"][0]
+        .as_str()
+        .unwrap()
+        .contains("Hấp thụ lực bán"));
+    // block orders are still reported as before
+    assert!(kinds(&sig).contains(&"block_order_open"));
+
+    let falling = run(absorption_flow(true)).await.signals;
+    assert!(
+        !kinds(&falling).contains(&"absorption"),
+        "the price followed the sells"
+    );
+}
+
+#[tokio::test]
+async fn accumulation_end_to_end() {
+    let sig = run(stealth_buys(true)).await.signals;
+    let acc: Vec<_> = sig.iter().filter(|s| s.kind == "accumulation").collect();
+    assert!(!acc.is_empty(), "{:?}", kinds(&sig));
+    assert_eq!(
+        (acc[0].side.as_str(), acc[0].state.as_str()),
+        ("buy", "open")
+    );
+    assert!(acc[0].features["group"]["n_trades"].as_u64().unwrap() >= 10);
+    assert!(
+        acc.iter()
+            .all(|s| s.correlation_id == acc[0].correlation_id),
+        "one episode"
+    );
+    assert!(
+        !kinds(&sig).contains(&"absorption"),
+        "medium trades are not absorption"
+    );
+    assert!(
+        !kinds(&sig).iter().any(|k| k.starts_with("block_order")),
+        "invisible to blocks"
+    );
+
+    let irregular = run(stealth_buys(false)).await.signals;
+    assert!(
+        !kinds(&irregular).contains(&"accumulation"),
+        "{:?}",
+        kinds(&irregular)
+    );
+}

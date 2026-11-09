@@ -2,6 +2,7 @@
 //! large-order signal today, with its orders (latest state of each correlation id) and
 //! child trades for hover details.
 
+use chrono::{DateTime, TimeZone, Utc};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -9,6 +10,8 @@ use std::sync::Arc;
 use crate::core::fmt::py_round_int;
 use crate::core::models::{Severity, Signal};
 use crate::core::tool::ToolContext;
+use crate::core::universe::Universe;
+use crate::tools::large_order_radar::outcome::OutcomeBook;
 use crate::tools::large_order_radar::window::DayTotals;
 
 /// Per-order aggregate over all of its signals; only the latest signal's payload is
@@ -106,14 +109,35 @@ struct Entry<'a> {
 /// - default overview: per symbol the newest `orders` (5) orders, the last `trades` (8)
 ///   child trades of the newest `orders_with_trades` (1) orders, and empty drawer-only
 ///   fields (metrics, baseline, summary, score breakdown) — what the radar hover shows;
-/// - `?full=1`: the v1 overview (30 orders, trades for 3, with score breakdowns).
+/// - `?full=1`: the v1 overview (30 orders, trades for 3, with score breakdowns);
+/// - `?at=HH:MM[:SS]` (Vietnam time): the radar as it was at that moment of the day
+///   (signals up to then, day totals from the last signal's snapshot, follow-through
+///   only for horizons already elapsed);
+/// - `?sectors=1`: large-order flow aggregated per sector (heatmap), also with `at`.
+///
+/// Every order carries `outcome` (price move 5/15/30 minutes after its first signal and
+/// until now); the overview carries `stats` (accuracy table) unless `at` is given.
 pub fn build_view(
     signals: &[Arc<Signal>],
     ctx: &ToolContext,
     params: &HashMap<String, String>,
     days: &BTreeMap<String, DayTotals>,
+    outcomes: &OutcomeBook,
 ) -> Value {
+    let trading_date = ctx.calendar.trading_date(ctx.clock.now());
+    let at = params
+        .get("at")
+        .and_then(|v| parse_at(v, trading_date, ctx));
+    if params.contains_key("at") && at.is_none() {
+        return json!({"error": "at must be HH:MM or HH:MM:SS"});
+    }
+    // past moments: day totals come from the signals' own snapshots
+    let no_days = BTreeMap::new();
+    let days = if at.is_some() { &no_days } else { days };
     let only = params.get("symbol").map(|s| s.to_ascii_uppercase());
+    let sectors_mode = params
+        .get("sectors")
+        .is_some_and(|v| v == "1" || v == "true");
     let full = params.get("full").is_some_and(|v| v == "1" || v == "true");
     let int = |k: &str, d: usize| params.get(k).and_then(|v| v.parse().ok()).unwrap_or(d);
     let with_trades = int("orders_with_trades", if full { 3 } else { 1 });
@@ -125,7 +149,7 @@ pub fn build_view(
     let mut order_of_symbols: Vec<&str> = Vec::new();
     let mut by_sym: HashMap<&str, Entry> = HashMap::new();
     for s in signals.iter().map(|s| &**s) {
-        if only.as_ref().is_some_and(|o| &s.symbol != o) {
+        if only.as_ref().is_some_and(|o| &s.symbol != o) || at.is_some_and(|a| s.ts > a) {
             continue;
         }
         let e = by_sym.entry(&s.symbol).or_insert_with(|| {
@@ -205,14 +229,20 @@ pub fn build_view(
             .max_by_key(|s| s.rank())
             .unwrap_or_default();
         if only.is_none() {
-            aggs.truncate(max_orders);
+            // the sector heatmap only needs per-symbol totals, not the orders
+            aggs.truncate(if sectors_mode { 0 } else { max_orders });
         }
         let orders: Vec<Map<String, Value>> = aggs
             .iter()
             .enumerate()
             .map(|(i, a)| {
                 let t = (only.is_some() || i < with_trades).then_some(keep_trades);
-                a.to_json(t, detail)
+                let mut o = a.to_json(t, detail);
+                o.insert(
+                    "outcome".into(),
+                    outcomes.order_json(&a.latest.correlation_id, at),
+                );
+                o
             })
             .collect();
 
@@ -252,7 +282,133 @@ pub fn build_view(
         ));
     }
     out.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(b.1)));
-    let trading_date = ctx.calendar.trading_date(ctx.clock.now()).to_string();
     let symbols: Vec<Value> = out.into_iter().map(|(_, _, v)| v).collect();
-    json!({"trading_date": trading_date, "symbols": symbols})
+    let mut doc = Map::new();
+    doc.insert("trading_date".into(), json!(trading_date.to_string()));
+    doc.insert("at".into(), json!(at.map(|a| a.to_rfc3339())));
+    if sectors_mode {
+        doc.insert(
+            "sectors".into(),
+            sectors(&symbols, days, &universe, at.is_none()),
+        );
+        return Value::Object(doc);
+    }
+    if only.is_none() && at.is_none() {
+        doc.insert("stats".into(), outcomes.stats());
+    }
+    doc.insert("symbols".into(), json!(symbols));
+    Value::Object(doc)
+}
+
+fn parse_at(v: &str, d: chrono::NaiveDate, ctx: &ToolContext) -> Option<DateTime<Utc>> {
+    let t = chrono::NaiveTime::parse_from_str(v, "%H:%M:%S")
+        .or_else(|_| chrono::NaiveTime::parse_from_str(v, "%H:%M"))
+        .ok()?;
+    ctx.calendar
+        .tz
+        .from_local_datetime(&d.and_time(t))
+        .single()
+        .map(|x| x.with_timezone(&Utc))
+}
+
+/// Large-order flow per sector. Live: every symbol with large trades today (from the
+/// day totals), including those without a signal; past moments: symbols with signals.
+fn sectors(
+    symbols: &[Value],
+    days: &BTreeMap<String, DayTotals>,
+    universe: &Universe,
+    live: bool,
+) -> Value {
+    struct Sym {
+        symbol: String,
+        buy: f64,
+        sell: f64,
+        putthrough: f64,
+        score: f64,
+        severity: Severity,
+    }
+    let mut rows: BTreeMap<String, Sym> = BTreeMap::new();
+    for v in symbols {
+        let sym = v["symbol"].as_str().unwrap_or_default().to_string();
+        rows.insert(
+            sym.clone(),
+            Sym {
+                symbol: sym,
+                buy: v["day_large_buy"].as_f64().unwrap_or(0.0),
+                sell: v["day_large_sell"].as_f64().unwrap_or(0.0),
+                putthrough: v["day_putthrough_value"].as_f64().unwrap_or(0.0),
+                score: v["max_score"].as_f64().unwrap_or(0.0),
+                severity: v["max_severity"]
+                    .as_str()
+                    .and_then(Severity::parse)
+                    .unwrap_or_default(),
+            },
+        );
+    }
+    if live {
+        for (sym, d) in days {
+            let r = rows.entry(sym.clone()).or_insert_with(|| Sym {
+                symbol: sym.clone(),
+                buy: 0.0,
+                sell: 0.0,
+                putthrough: 0.0,
+                score: 0.0,
+                severity: Severity::Info,
+            });
+            (r.buy, r.sell, r.putthrough) = (d.large_buy, d.large_sell, d.putthrough_value);
+        }
+    }
+    let mut n_universe: HashMap<String, usize> = HashMap::new();
+    for i in universe.instruments() {
+        if let Some(sec) = i.sector {
+            *n_universe.entry(sec).or_default() += 1;
+        }
+    }
+    let mut by_sector: BTreeMap<String, Vec<Sym>> = BTreeMap::new();
+    for (_, r) in rows {
+        let sector = universe
+            .get(&r.symbol)
+            .and_then(|i| i.sector.clone())
+            .unwrap_or_else(|| "Khác".to_string());
+        by_sector.entry(sector).or_default().push(r);
+    }
+    let mut out: Vec<(f64, Value)> = by_sector
+        .into_iter()
+        .map(|(sector, mut syms)| {
+            syms.sort_by(|a, b| (b.buy - b.sell).total_cmp(&(a.buy - a.sell)));
+            let buy: f64 = syms.iter().map(|s| s.buy).sum();
+            let sell: f64 = syms.iter().map(|s| s.sell).sum();
+            let n_universe = n_universe.get(&sector).copied().unwrap_or(syms.len());
+            let sev = syms
+                .iter()
+                .map(|s| s.severity)
+                .max_by_key(|s| s.rank())
+                .unwrap_or_default();
+            let net = buy - sell;
+            (
+                net,
+                json!({
+                    "sector": sector,
+                    "n_symbols": n_universe,
+                    "n_active": syms.len(),
+                    "large_buy": py_round_int(buy),
+                    "large_sell": py_round_int(sell),
+                    "net_large": py_round_int(net),
+                    "putthrough_value": py_round_int(syms.iter().map(|s| s.putthrough).sum()),
+                    "max_score": syms.iter().map(|s| s.score).fold(0.0, f64::max),
+                    "max_severity": sev.as_str(),
+                    "symbols": syms.iter().map(|s| json!({
+                        "symbol": s.symbol,
+                        "large_buy": py_round_int(s.buy),
+                        "large_sell": py_round_int(s.sell),
+                        "net_large": py_round_int(s.buy - s.sell),
+                        "max_score": s.score,
+                        "max_severity": s.severity.as_str(),
+                    })).collect::<Vec<_>>(),
+                }),
+            )
+        })
+        .collect();
+    out.sort_by(|a, b| b.0.total_cmp(&a.0));
+    json!(out.into_iter().map(|(_, v)| v).collect::<Vec<_>>())
 }

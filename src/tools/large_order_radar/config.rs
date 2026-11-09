@@ -87,8 +87,87 @@ pub struct RadarConfig {
     pub weights: ScoreWeights,
     pub notice_score: f64,
     pub alert_score: f64,
-    /// Tín hiệu hấp thụ (chưa bật)
-    pub absorption_enabled: bool,
+    /// Tín hiệu hấp thụ: lệnh lớn dồn một chiều nhưng giá không đi theo
+    pub absorption: AbsorptionConfig,
+    /// Tín hiệu gom/xả âm thầm: nhiều lệnh vừa, đều đặn, cùng chiều
+    pub accumulation: AccumulationConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct AbsorptionConfig {
+    pub enabled: bool,
+    /// Giá trị lệnh lớn bị hấp thụ tối thiểu = k × ngưỡng mở nhóm của mã
+    pub min_value_k: f64,
+    /// Tỷ trọng tối thiểu của chiều bị hấp thụ trong giá trị lệnh lớn của cửa sổ
+    pub min_share: f64,
+    /// Số lệnh lớn tối thiểu của chiều bị hấp thụ
+    pub min_trades: u32,
+    /// Áp lực phải kéo dài tối thiểu (giây) — loại một lệnh mẹ khớp nhanh
+    pub min_duration_sec: f64,
+    /// Giá đi theo chiều lệnh lớn không quá N bước giá (1 bước = dao động mua/bán)
+    pub max_move_ticks: f64,
+    /// Phát UPDATE khi giá trị bị hấp thụ tăng thêm tỷ lệ này
+    pub update_step_ratio: f64,
+    /// Nghỉ giữa hai đợt cùng chiều của một mã (giây)
+    pub cooldown_sec: f64,
+}
+
+impl Default for AbsorptionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_value_k: 2.0,
+            min_share: 0.7,
+            min_trades: 5,
+            min_duration_sec: 180.0,
+            max_move_ticks: 1.0,
+            update_step_ratio: 0.5,
+            cooldown_sec: 900.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct AccumulationConfig {
+    pub enabled: bool,
+    /// Cửa sổ theo dõi (giây)
+    pub window_sec: f64,
+    /// Lệnh "vừa" ≥ k × trung vị giá trị lệnh (dưới ngưỡng lệnh lớn)
+    pub medium_k: f64,
+    /// Sàn giá trị lệnh vừa (VND); dùng khi chưa có baseline
+    pub medium_min_value: f64,
+    /// Số lệnh vừa cùng chiều tối thiểu trong cửa sổ
+    pub min_trades: u32,
+    /// Tổng giá trị tối thiểu = k × ngưỡng mở nhóm của mã
+    pub min_value_k: f64,
+    /// Tỷ trọng tối thiểu của chiều chiếm ưu thế trong giá trị lệnh vừa
+    pub min_share: f64,
+    /// Đều đặn: hệ số biến thiên khối lượng ≤ mức này, hoặc
+    pub max_volume_cv: f64,
+    /// … một mức khối lượng lặp lại chiếm ≥ tỷ lệ này số lệnh
+    pub min_repeat_share: f64,
+    pub update_step_ratio: f64,
+    pub cooldown_sec: f64,
+}
+
+impl Default for AccumulationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            window_sec: 1800.0,
+            medium_k: 2.0,
+            medium_min_value: 50e6,
+            min_trades: 10,
+            min_value_k: 1.0,
+            min_share: 0.75,
+            max_volume_cv: 0.35,
+            min_repeat_share: 0.4,
+            update_step_ratio: 0.5,
+            cooldown_sec: 1800.0,
+        }
+    }
 }
 
 impl Default for RadarConfig {
@@ -121,7 +200,8 @@ impl Default for RadarConfig {
             weights: ScoreWeights::default(),
             notice_score: 40.0,
             alert_score: 65.0,
-            absorption_enabled: false,
+            absorption: AbsorptionConfig::default(),
+            accumulation: AccumulationConfig::default(),
         }
     }
 }

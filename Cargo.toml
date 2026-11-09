@@ -28,6 +28,7 @@ parking_lot = "0.12"
 rand = "0.8"
 rand_chacha = "0.3"
 rand_distr = "0.4"
+rustc-hash = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 schemars = "0.8"
 serde = { version = "1", features = ["derive", "rc"] }

@@ -62,7 +62,16 @@ tools:
       idle_close_sec: 90
       notice_score: 40
       alert_score: 65
-      absorption_enabled: false
+      absorption:            # lệnh lớn dồn một chiều nhưng giá đứng yên → có bên đang hấp thụ
+        enabled: true
+        min_value_k: 2         # ≥ 2 × ngưỡng mở nhóm của mã
+        min_share: 0.7
+        max_move_ticks: 1     # giá đi theo chiều lệnh lớn ≤ 1 bước giá
+      accumulation:          # gom/xả âm thầm: nhiều lệnh vừa, đều đặn, cùng chiều trong 30′
+        enabled: true
+        window_sec: 1800
+        min_trades: 10
+        min_share: 0.75
   tick_counter:
     enabled: true
     module: astrq.tools.tick_counter:TickCounter

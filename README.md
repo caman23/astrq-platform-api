@@ -4,7 +4,14 @@ Read-only, realtime analysis tools for Vietnamese equities. Tool #1 is the
 **Large Order Radar** (Radar Lệnh Lớn) for the VN100 basket: it detects single
 block trades and split same-side parent orders tick by tick, scores them, and
 shows them on a sweeping radar screen. Hovering a blip shows each large order
-(time window, side, value, trade count, VWAP, price impact) and its child trades.
+(time window, side, value, trade count, VWAP, price impact), its child trades and what
+the price did 5/15/30 minutes after it.
+
+Signals: block trades and split parent orders, **absorption** (one-sided large flow the
+price does not follow), **stealth accumulation/distribution** (regular medium-sized
+same-side trades below the large-trade bar), auction and put-through blocks. The
+dashboard adds an accuracy table (share of orders whose price moved their way), a
+timeline to replay the day, and a sector heatmap of net large-order flow.
 
 > Thông tin chỉ mang tính tham khảo, không phải khuyến nghị đầu tư.
 > The system never places orders or touches trading accounts.
@@ -84,6 +91,17 @@ Bot commands: `/status`, `/on <tool>`, `/off <tool>`, `/min <info|notice|alert>`
 | `bg` | `transparent` | dark |
 | `click` | `open` (open full dashboard for that symbol in a new tab) · `none` | `open` |
 
+### Sector heatmap (second iframe)
+
+```html
+<iframe src="https://radar.astrq.io.vn/embed/sectors?compact=1"
+        width="100%" height="460" style="border:0" loading="lazy"></iframe>
+```
+
+Net large-order flow (aggressive large buys − large sells) per sector; tiles are
+coloured by direction and shaded by size, with the strongest symbols listed. Options:
+`header=0`, `bg=transparent`, `click=none`, `compact=1`.
+
 Only sites listed in `api.frame_ancestors` (config/settings.yaml) may embed it — the
 browser blocks every other site (CSP `frame-ancestors`). Default: `astrq.io.vn` and its
 subdomains.
@@ -111,7 +129,7 @@ docs/          architecture, ADRs (0006: Rust rewrite), provider notes, writing-
 | `GET /health`, `GET /ready`, `GET /metrics` | liveness, readiness, Prometheus text |
 | `GET /api/status` | clock, session, feed status, tick rate, feed vs internal latency, tools |
 | `GET /api/tools` · `POST /api/tools/{id}/enabled` | manifests/config/status · enable/disable |
-| `GET /api/tools/large_order_radar/view` | radar overview for today: newest 5 orders per symbol, last 8 trades of the newest one (`?symbol=X`: everything for X · `?full=1`: v1 document with 30 orders and score breakdowns) |
+| `GET /api/tools/large_order_radar/view` | radar overview for today: newest 5 orders per symbol, last 8 trades of the newest one, each order's `outcome` (price 5/15/30 min later and now) and the `stats` accuracy table. `?symbol=X`: everything for X · `?full=1`: v1-sized document · `?at=HH:MM`: the radar as it was at that time · `?sectors=1`: per-sector heatmap data |
 | `GET /api/signals?symbol=&side=&min_severity=&limit=` | today's signals |
 | `WS /ws` | `hello`, `status` (1 s), `signal`, `alert`, `summary` messages |
 

@@ -59,7 +59,28 @@ Rust (tokio + axum) since ADR-0006; module names below keep their v1 roles.
 4. **Per-symbol window** (15 min, O(1) updates): large buy/sell, net, large ratio, value/min, price change; plus day totals.
 5. **Score** 0–100 = weighted normalized factors (value, relative size, velocity, concentration, directional price impact, side confidence). Every signal carries `explanation` with each factor's contribution. Severity: info < 40 ≤ notice < 65 ≤ alert.
 6. **Sessions**: ATO/ATC prints → `block_auction` (no grouping); put-through → `block_putthrough`, kept out of matched-order metrics, severity capped at notice.
-7. **Absorption** signal: config flag, off (not implemented in v1).
+7. **Absorption** (`absorption`, v1.1): in the 15-minute window, large trades on one side
+   (≥ `min_value_k` × the symbol's group-open threshold, ≥ 70 % of large value, ≥ 5
+   trades, sustained ≥ 3 minutes) while those trades' own execution prices move ≤ 1 tick
+   their way. Comparing same-side prints avoids the bid/ask bounce. Signal side = the
+   absorber (large sells absorbed → buy). Episodes: OPEN, UPDATE on +50 %, 15-minute
+   cooldown.
+8. **Stealth accumulation / distribution** (`accumulation`, v1.1): medium trades
+   (≥ 2 × median, below the large bar, not inside an opened block group) on one side over
+   30 minutes: ≥ 10 trades, ≥ 75 % of medium value, total ≥ the group-open threshold, and
+   regular sizes (volume CV ≤ 0.35 or one size ≥ 40 % of trades). This is what TWAP/iceberg
+   execution looks like and what block detection cannot see.
+9. **Follow-through** (v1.1): each order's reference price at its first signal; the price
+   prevailing 5/15/30 minutes later is resolved exactly (last trade before the first trade
+   past the due time, or on the timer) from per-symbol FIFOs, O(1) per tick. The view's
+   `stats` table gives, per severity and signal family, the share of buy/sell orders whose
+   price moved their way and the average directional move. `astrq backtest` prints the
+   same table (`follow_through`) for recorded days. It is a description of the past, not
+   a forecast.
+
+Cost of 7–9 on the hot path: +0.2 µs per event (≈ 12 % offline: 565k → 505k events/s on
+a full synthetic day), with no per-tick allocation; at live VN100 rates (~330 events/s)
+that is ~0.007 % of a core. Old signals are unchanged (golden files identical).
 
 ## Dashboard
 
@@ -69,7 +90,9 @@ day's peak radar score; blip size encodes large-trade value; shape + color
 encode the dominant side; brightness follows the sweep beam and fades as the
 symbol's last signal ages. Hover → order details with child trades; click → pinned
 drawer with the full history and score breakdown. Side panel: live signal feed,
-VN100 ranking table (net large / score), system health and tool toggles.
+VN100 ranking table (net large / score), sector heatmap, accuracy table, system health
+and tool toggles. A timeline under the radar replays the day (`?at=HH:MM` views, rendered
+once per moment and shared through the response cache).
 
 ### Serving many viewers
 

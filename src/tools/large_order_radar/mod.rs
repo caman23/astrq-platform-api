@@ -1,7 +1,9 @@
 //! Tool #1 — Large Order Radar (Radar Lệnh Lớn).
 
 pub mod config;
+pub mod flow;
 pub mod grouping;
+pub mod outcome;
 pub mod scoring;
 pub mod side;
 pub mod thresholds;
@@ -21,7 +23,9 @@ use crate::core::fmt::{self, py_round, py_round_int};
 use crate::core::models::{Contribution, MarketEvent, Severity, Side, Signal, Tick};
 use crate::core::tool::{Subscription, Tool, ToolContext, ToolManifest};
 use config::RadarConfig;
+use flow::{AbsorptionDetector, AccumulationDetector, FlowEvent};
 use grouping::{GroupBook, ParentGroup, TradeRec};
+use outcome::OutcomeBook;
 use scoring::{score, ScoreInput};
 use side::SideClassifier;
 use thresholds::Thresholds;
@@ -46,6 +50,12 @@ struct State {
     days: BTreeMap<String, DayTotals>,
     classifier: Option<SideClassifier>,
     expected: BTreeMap<String, Value>,
+    #[serde(default)]
+    outcomes: OutcomeBook,
+    #[serde(default)]
+    absorption: AbsorptionDetector,
+    #[serde(default)]
+    accumulation: AccumulationDetector,
 }
 
 pub struct LargeOrderRadar {
@@ -56,6 +66,10 @@ pub struct LargeOrderRadar {
     pub days: BTreeMap<String, DayTotals>,
     expected: BTreeMap<String, Value>,
     trading_date: Option<NaiveDate>,
+    /// Follow-through of every order (price 5/15/30 minutes after its first signal).
+    pub outcomes: OutcomeBook,
+    absorption: AbsorptionDetector,
+    accumulation: AccumulationDetector,
 }
 
 struct SignalSpec<'a> {
@@ -89,6 +103,9 @@ impl LargeOrderRadar {
             days: BTreeMap::new(),
             expected: BTreeMap::new(),
             trading_date: None,
+            outcomes: OutcomeBook::default(),
+            absorption: AbsorptionDetector::default(),
+            accumulation: AccumulationDetector::default(),
             cfg,
         }
     }
@@ -98,15 +115,20 @@ impl LargeOrderRadar {
         Ok(Self::new(cfg))
     }
 
+    // get_mut first: `entry(symbol.to_string())` would allocate a key on every tick
     fn window(&mut self, symbol: &str) -> &mut SymbolWindow {
-        let w = self.cfg.metrics_window_sec;
-        self.windows
-            .entry(symbol.to_string())
-            .or_insert_with(|| SymbolWindow::new(w))
+        if !self.windows.contains_key(symbol) {
+            let w = SymbolWindow::new(self.cfg.metrics_window_sec);
+            self.windows.insert(symbol.to_string(), w);
+        }
+        self.windows.get_mut(symbol).expect("just inserted")
     }
 
     fn day(&mut self, symbol: &str) -> &mut DayTotals {
-        self.days.entry(symbol.to_string()).or_default()
+        if !self.days.contains_key(symbol) {
+            self.days.insert(symbol.to_string(), DayTotals::default());
+        }
+        self.days.get_mut(symbol).expect("just inserted")
     }
 
     fn roll_day(&mut self, ts: DateTime<Utc>, ctx: &ToolContext) {
@@ -117,9 +139,18 @@ impl LargeOrderRadar {
                 self.windows.clear();
                 self.days.clear();
                 self.expected.clear();
+                self.outcomes.clear();
+                self.absorption.clear();
+                self.accumulation.clear();
             }
             self.trading_date = Some(d);
         }
+    }
+
+    fn tick_size(&self, symbol: &str, price: f64, ctx: &ToolContext) -> f64 {
+        let u = ctx.universe.read();
+        let exchange = u.get(symbol).map_or("HOSE", |i| i.exchange.as_str());
+        ctx.rules.tick_size(price, exchange)
     }
 
     fn baseline(&self, symbol: &str, ctx: &ToolContext) -> Option<Baseline> {
@@ -409,6 +440,156 @@ impl LargeOrderRadar {
         )
     }
 
+    /// Signal for an absorption / accumulation episode (same `group` shape as block
+    /// orders, so the dashboard renders it with the same components).
+    fn flow_signal(&mut self, ev: FlowEvent, ctx: &ToolContext, t: &Tick) -> Signal {
+        let baseline = self.baseline(&t.symbol, ctx);
+        let mv = if ev.first_price > 0.0 {
+            (ev.last_price - ev.first_price) / ev.first_price * 100.0
+        } else {
+            0.0
+        };
+        let duration = (ev.last_ts - ev.first_ts).num_milliseconds() as f64 / 1000.0;
+        let mut flags = vec![];
+        if baseline.is_none() {
+            flags.push("baseline_cold".to_string());
+        }
+        let mut features = Map::new();
+        features.insert(
+            "group".into(),
+            json!({
+                "group_id": ev.correlation_id,
+                "action": ev.action,
+                "side": ev.side.as_str(),
+                "session": t.session.as_str(),
+                "total_value": py_round_int(ev.value),
+                "total_volume": ev.volume,
+                "n_trades": ev.n_trades,
+                "vwap": ev.last_price,
+                "first_price": ev.first_price,
+                "last_price": ev.last_price,
+                "min_price": ev.first_price.min(ev.last_price),
+                "max_price": ev.first_price.max(ev.last_price),
+                "price_change_pct": py_round(mv, 3),
+                "started_at": ev.first_ts.to_rfc3339(),
+                "last_at": ev.last_ts.to_rfc3339(),
+                "duration_sec": py_round(duration, 1),
+                "max_single_value": 0,
+                "open_threshold": py_round_int(ev.threshold),
+                "triggers": [ev.kind],
+                "side_confidence": 1.0,
+                "flow_share": py_round(ev.share, 3),
+                "trades": [],
+            }),
+        );
+        features.insert(
+            "baseline".into(),
+            Self::baseline_features(baseline.as_ref()),
+        );
+        features.insert("summary_vi".into(), json!(ev.summary));
+        self.make_signal(
+            ctx,
+            SignalSpec {
+                symbol: &t.symbol,
+                ts: t.ts_exchange,
+                kind: ev.kind.into(),
+                state: ev.action,
+                side: ev.side,
+                correlation_id: ev.correlation_id,
+                dedupe_suffix: ev.update.to_string(),
+                score: ev.score,
+                severity: ev.severity,
+                explanation: ev.explanation,
+                flags,
+                features,
+            },
+        )
+    }
+
+    /// Absorption + accumulation on a continuous-session trade (O(1) amortized).
+    #[allow(clippy::too_many_arguments)]
+    fn flow_signals(
+        &mut self,
+        t: &Tick,
+        side: Side,
+        is_large: bool,
+        in_block: bool,
+        open_threshold: f64,
+        baseline: Option<&Baseline>,
+        ctx: &ToolContext,
+    ) -> Vec<Signal> {
+        let mut out = Vec::new();
+        if self.cfg.absorption.enabled && is_large {
+            self.absorption
+                .on_large(&t.symbol, t.ts_exchange, side, t.value, t.price);
+        }
+        if self.cfg.absorption.enabled && !self.absorption.idle(&t.symbol) {
+            let tick = self.tick_size(&t.symbol, t.price, ctx);
+            let w = self
+                .windows
+                .get(&t.symbol)
+                .expect("window exists after add");
+            if let Some(ev) = self.absorption.check(
+                &t.symbol,
+                w,
+                open_threshold,
+                tick,
+                t.ts_exchange,
+                &self.cfg.absorption,
+                &self.cfg,
+            ) {
+                out.push(self.flow_signal(ev, ctx, t));
+            }
+        }
+        if self.cfg.accumulation.enabled {
+            let acfg = &self.cfg.accumulation;
+            // trades inside an open block group are already on the radar
+            let medium = !in_block
+                && AccumulationDetector::is_medium(
+                    t.value,
+                    is_large,
+                    baseline.map(|b| b.median_trade_value),
+                    acfg,
+                );
+            if let Some(ev) = self.accumulation.on_trade(
+                &t.symbol,
+                t.ts_exchange,
+                side,
+                t.volume,
+                t.value,
+                t.price,
+                medium,
+                open_threshold,
+                acfg,
+                &self.cfg,
+            ) {
+                out.push(self.flow_signal(ev, ctx, t));
+            }
+        }
+        out
+    }
+
+    /// Start follow-through tracking for orders seen for the first time.
+    fn track_outcomes(&mut self, signals: &[Signal]) {
+        for s in signals {
+            let price = s
+                .features
+                .get("group")
+                .and_then(|g| g.get("last_price"))
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            self.outcomes.register(
+                &s.correlation_id,
+                &s.symbol,
+                &s.kind,
+                s.side,
+                s.severity,
+                s.ts,
+                price,
+            );
+        }
+    }
+
     fn on_tick(&mut self, t: &Tick, ctx: &ToolContext) -> Vec<Signal> {
         let baseline = self.baseline(&t.symbol, ctx);
         if t.is_negotiated {
@@ -426,6 +607,7 @@ impl LargeOrderRadar {
             }
             return vec![];
         }
+        self.outcomes.on_trade(&t.symbol, t.ts_exchange, t.price);
         let c = self.classifier.classify(t);
         let th = Thresholds { cfg: &self.cfg };
         let triggers = th.large_triggers(t.value, baseline.as_ref());
@@ -455,8 +637,20 @@ impl LargeOrderRadar {
             }
             return vec![];
         }
-        if !t.session.is_continuous() || !flagged {
+        if !t.session.is_continuous() {
             return vec![];
+        }
+        let is_large = !triggers.is_empty();
+        if !flagged {
+            return self.flow_signals(
+                t,
+                c.side,
+                is_large,
+                false,
+                open_threshold,
+                baseline.as_ref(),
+                ctx,
+            );
         }
         let rec = TradeRec {
             ts: t.ts_exchange,
@@ -470,13 +664,7 @@ impl LargeOrderRadar {
             triggers,
             seq: t.seq,
         };
-        let exchange = ctx
-            .universe
-            .read()
-            .get(&t.symbol)
-            .map(|i| i.exchange.clone())
-            .unwrap_or_else(|| "HOSE".into());
-        let tick_size = ctx.rules.tick_size(t.price, &exchange);
+        let tick_size = self.tick_size(&t.symbol, t.price, ctx);
         let events = self.book.add(
             &t.symbol,
             rec,
@@ -485,12 +673,29 @@ impl LargeOrderRadar {
             open_threshold,
             baseline.is_none(),
         );
+        for (a, g) in &events {
+            if *a == "open" {
+                self.accumulation
+                    .forget_since(&g.symbol, g.side, g.first_ts);
+            }
+        }
+        let in_block = self.book.is_open(&t.symbol, c.side);
         let emit_close = self.cfg.emit_close;
-        events
+        let mut out: Vec<Signal> = events
             .into_iter()
             .filter(|(a, _)| *a != "close" || emit_close)
             .map(|(a, g)| self.group_signal(a, &g, ctx, t.ts_exchange))
-            .collect()
+            .collect();
+        out.extend(self.flow_signals(
+            t,
+            c.side,
+            is_large,
+            in_block,
+            open_threshold,
+            baseline.as_ref(),
+            ctx,
+        ));
+        out
     }
 }
 
@@ -499,7 +704,7 @@ impl Tool for LargeOrderRadar {
         Self::ID
     }
     fn version(&self) -> &'static str {
-        "1.0.0"
+        "1.1.0"
     }
 
     fn manifest(&self) -> ToolManifest {
@@ -522,6 +727,8 @@ impl Tool for LargeOrderRadar {
                 "block_order_close",
                 "block_auction",
                 "block_putthrough",
+                "absorption",
+                "accumulation",
             ]
             .iter()
             .map(|s| s.to_string())
@@ -552,7 +759,11 @@ impl Tool for LargeOrderRadar {
                 );
                 vec![]
             }
-            MarketEvent::Tick(t) => self.on_tick(t, ctx),
+            MarketEvent::Tick(t) => {
+                let out = self.on_tick(t, ctx);
+                self.track_outcomes(&out);
+                out
+            }
             MarketEvent::ForeignFlow(_) => vec![],
         })
     }
@@ -577,6 +788,32 @@ impl Tool for LargeOrderRadar {
         for w in self.windows.values_mut() {
             w.evict(t);
         }
+        self.outcomes.on_timer(now);
+        if self.cfg.accumulation.enabled {
+            self.accumulation.on_timer(now, &self.cfg.accumulation);
+        }
+        if self.cfg.absorption.enabled {
+            // end absorption episodes whose window no longer qualifies
+            for sym in self.absorption.active_symbols() {
+                if let Some(w) = self.windows.get(&sym) {
+                    let open = Thresholds { cfg: &self.cfg }
+                        .group_open_value(self.baseline(&sym, ctx).as_ref());
+                    let tick = w
+                        .entries
+                        .back()
+                        .map_or(0.0, |e| self.tick_size(&sym, e.4, ctx));
+                    let _ = self.absorption.check(
+                        &sym,
+                        w,
+                        open,
+                        tick,
+                        now,
+                        &self.cfg.absorption,
+                        &self.cfg,
+                    );
+                }
+            }
+        }
         Ok(out)
     }
 
@@ -588,6 +825,9 @@ impl Tool for LargeOrderRadar {
             days: self.days.clone(),
             classifier: Some(self.classifier.clone()),
             expected: self.expected.clone(),
+            outcomes: self.outcomes.clone(),
+            absorption: self.absorption.clone(),
+            accumulation: self.accumulation.clone(),
         };
         serde_json::to_vec(&st).ok()
     }
@@ -604,6 +844,9 @@ impl Tool for LargeOrderRadar {
             self.classifier = c;
         }
         self.expected = st.expected;
+        self.outcomes = st.outcomes;
+        self.absorption = st.absorption;
+        self.accumulation = st.accumulation;
         Ok(())
     }
 
@@ -613,7 +856,13 @@ impl Tool for LargeOrderRadar {
         ctx: &ToolContext,
         params: &HashMap<String, String>,
     ) -> Option<Value> {
-        Some(view::build_view(signals, ctx, params, &self.days))
+        Some(view::build_view(
+            signals,
+            ctx,
+            params,
+            &self.days,
+            &self.outcomes,
+        ))
     }
 
     fn daily_summary(&self, _ctx: &ToolContext) -> Option<String> {

@@ -358,6 +358,16 @@ async fn backtest(
     let mut top: Vec<(String, u64)> = by_sym.into_iter().collect();
     top.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     top.truncate(10);
+    // accuracy table (price 5/15/30 minutes after each order's first signal)
+    let follow_through = res
+        .runners
+        .get("large_order_radar")
+        .and_then(|r| {
+            let all: Vec<_> = res.signals.iter().cloned().map(Arc::new).collect();
+            r.tool.lock().view(&all, &r.ctx, &Default::default())
+        })
+        .map(|v| v["stats"].clone())
+        .unwrap_or_default();
     let report = json!({
         "input": input.display().to_string(),
         "events": n_events,
@@ -371,7 +381,8 @@ async fn backtest(
         "quality_flags": flags,
         "elapsed_sec": (elapsed * 1000.0).round() / 1000.0,
         "events_per_sec": (n_events as f64 / elapsed.max(1e-9)).round(),
-        "note": "Báo cáo đếm tín hiệu để chỉnh ngưỡng; không đánh giá hiệu quả dự báo giá.",
+        "follow_through": follow_through,
+        "note": "Đếm tín hiệu để chỉnh ngưỡng. follow_through: tỷ lệ giá đi đúng chiều lệnh sau 5/15/30 phút trên dữ liệu này — thống kê quá khứ, không phải dự báo.",
     });
     println!("{}", serde_json::to_string_pretty(&report)?);
     if verbose {

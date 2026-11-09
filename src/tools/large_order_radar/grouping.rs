@@ -261,6 +261,13 @@ impl GroupBook {
         out
     }
 
+    /// Is there an opened (signalled) group for this symbol and side?
+    pub fn is_open(&self, symbol: &str, side: Side) -> bool {
+        self.active
+            .get(&key(symbol, side))
+            .is_some_and(|g| g.state == GroupState::Open)
+    }
+
     fn close_key(&mut self, k: &str) -> Vec<GroupEvent> {
         match self.active.remove(k) {
             Some(mut g) if g.state == GroupState::Open => {

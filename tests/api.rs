@@ -2,6 +2,7 @@
 
 use astrq::core::config::{load_settings, Secret, Settings};
 use astrq::core::platform::Platform;
+use chrono::Timelike;
 use futures_util::StreamExt;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -365,5 +366,115 @@ async fn view_cache_and_compact_overview() {
         .iter()
         .flat_map(|s| s["orders"].as_array().unwrap().clone())
         .any(|o| !o["explanation"].as_array().unwrap().is_empty()));
+    server.abort();
+}
+
+/// v1.1: follow-through on orders + accuracy table, timeline (`at`), sector heatmap.
+#[tokio::test(flavor = "multi_thread")]
+async fn view_follow_through_timeline_and_sectors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (base, platform, server) = serve(settings(tmp.path())).await;
+    let c = reqwest::Client::new();
+    let url = format!("{base}/api/tools/large_order_radar/view");
+    let get = |q: &str| c.get(format!("{url}{q}")).send();
+
+    // wait until some orders have a 5-minute outcome (synthetic market at 400x)
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut v = Value::Null;
+    while Instant::now() < deadline {
+        v = get("").await.unwrap().json().await.unwrap();
+        let resolved = v["symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|s| s["orders"].as_array().unwrap())
+            .any(|o| o["outcome"]["5m"].is_number());
+        if resolved {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    let order = v["symbols"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|s| s["orders"].as_array().unwrap())
+        .find(|o| o["outcome"]["5m"].is_number())
+        .expect("an order with a 5-minute follow-through");
+    assert!(order["outcome"]["ref_price"].as_f64().unwrap() > 0.0);
+    assert!(order["outcome"].get("now").is_some());
+    let rows = v["stats"]["rows"].as_array().expect("accuracy table");
+    let all = rows.iter().find(|r| r["key"] == "all").expect("all row");
+    assert!(all["n"][0].as_u64().unwrap() >= 1);
+    assert_eq!(
+        v["stats"]["horizons"],
+        serde_json::json!(["5m", "15m", "30m"])
+    );
+
+    // timeline: a past moment only shows signals up to then, without "now" or stats
+    let first = v["symbols"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|s| s["last_signal_at"].as_str())
+        .min()
+        .unwrap()
+        .to_string();
+    // +1 s: `at` has second resolution and the signal has milliseconds
+    let t = chrono::DateTime::parse_from_rfc3339(&first).unwrap() + chrono::Duration::seconds(1);
+    let at = t
+        .with_timezone(&chrono_tz::Asia::Ho_Chi_Minh)
+        .format("%H:%M:%S")
+        .to_string();
+    let bound = t.with_nanosecond(0).unwrap();
+    let past: Value = get(&format!("?at={at}"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(past["at"].is_string());
+    assert!(past.get("stats").is_none());
+    let syms = past["symbols"].as_array().unwrap();
+    assert!(
+        !syms.is_empty(),
+        "the earliest symbol is on the radar at {at}"
+    );
+    for s in syms {
+        let last =
+            chrono::DateTime::parse_from_rfc3339(s["last_signal_at"].as_str().unwrap()).unwrap();
+        assert!(last <= bound, "{last} after {bound}");
+        for o in s["orders"].as_array().unwrap() {
+            assert!(o["outcome"].is_null() || o["outcome"]["now"].is_null());
+        }
+    }
+    assert_eq!(get("?at=25:99").await.unwrap().status(), 422);
+
+    // sector heatmap: every sector adds up its symbols
+    let sec: Value = get("?sectors=1").await.unwrap().json().await.unwrap();
+    let sectors = sec["sectors"].as_array().expect("sectors");
+    assert!(!sectors.is_empty());
+    for s in sectors {
+        let sum: i64 = s["symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["net_large"].as_i64().unwrap())
+            .sum();
+        assert!(
+            (sum - s["net_large"].as_i64().unwrap()).abs()
+                <= s["symbols"].as_array().unwrap().len() as i64
+        );
+        assert!(s["n_active"].as_u64().unwrap() <= s["n_symbols"].as_u64().unwrap());
+    }
+    let nets: Vec<i64> = sectors
+        .iter()
+        .map(|s| s["net_large"].as_i64().unwrap())
+        .collect();
+    assert!(
+        nets.windows(2).all(|w| w[0] >= w[1]),
+        "sorted from net buying to net selling"
+    );
+    platform.stop().await;
     server.abort();
 }
