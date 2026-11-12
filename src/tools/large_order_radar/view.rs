@@ -117,19 +117,30 @@ struct Entry<'a> {
 ///
 /// Every order carries `outcome` (price move 5/15/30 minutes after its first signal and
 /// until now); the overview carries `stats` (accuracy table) unless `at` is given.
+///
+/// `trading_date` is the session the signals belong to (today, the last session while
+/// none has started yet, or an archived day).
 pub fn build_view(
     signals: &[Arc<Signal>],
     ctx: &ToolContext,
     params: &HashMap<String, String>,
+    trading_date: chrono::NaiveDate,
     days: &BTreeMap<String, DayTotals>,
     outcomes: &OutcomeBook,
 ) -> Value {
-    let trading_date = ctx.calendar.trading_date(ctx.clock.now());
     let at = params
         .get("at")
         .and_then(|v| parse_at(v, trading_date, ctx));
     if params.contains_key("at") && at.is_none() {
         return json!({"error": "at must be HH:MM or HH:MM:SS"});
+    }
+    if params.get("flow").is_some_and(|v| v == "1" || v == "true") {
+        let bucket = params
+            .get("bucket")
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|b| FLOW_BUCKETS.contains(b))
+            .unwrap_or(5);
+        return flow(signals, ctx, trading_date, at, bucket);
     }
     // past moments: day totals come from the signals' own snapshots
     let no_days = BTreeMap::new();
@@ -298,6 +309,123 @@ pub fn build_view(
     }
     doc.insert("symbols".into(), json!(symbols));
     Value::Object(doc)
+}
+
+/// Allowed `bucket` sizes (minutes) for `?flow=1`.
+pub const FLOW_BUCKETS: [u32; 4] = [1, 5, 15, 30];
+
+/// Market-wide large-order flow through the day (`?flow=1&bucket=5`): every large order
+/// (block / split parent order, auction block) is counted once, at its latest state, in the
+/// bucket where it started. Put-through deals are summed separately (not aggressive flow);
+/// absorption and stealth accumulation are counted per bucket as markers (their value
+/// overlaps the orders, so it is not added to the flow).
+fn flow(
+    signals: &[Arc<Signal>],
+    ctx: &ToolContext,
+    trading_date: chrono::NaiveDate,
+    at: Option<DateTime<Utc>>,
+    bucket: u32,
+) -> Value {
+    #[derive(Default)]
+    struct B {
+        buy: f64,
+        sell: f64,
+        n_buy: u64,
+        n_sell: u64,
+        absorption: u64,
+        accumulation: u64,
+    }
+    let mut latest: HashMap<&str, &Signal> = HashMap::new();
+    for s in signals.iter().map(|s| &**s) {
+        if at.is_some_and(|a| s.ts > a) {
+            continue;
+        }
+        latest.insert(&s.correlation_id, s);
+    }
+    let tz = ctx.calendar.tz;
+    let minute_of = |s: &Signal| -> Option<u32> {
+        let started = s
+            .features
+            .get("group")
+            .and_then(|g| g.get("started_at"))
+            .and_then(Value::as_str)
+            .and_then(|v| DateTime::parse_from_rfc3339(v).ok())
+            .map(|d| d.with_timezone(&Utc))
+            .unwrap_or(s.ts);
+        // the signals given all belong to `trading_date` (the store / archive is per day)
+        let local = started.with_timezone(&tz);
+        use chrono::Timelike;
+        let m = local.hour() * 60 + local.minute();
+        Some(m - m % bucket)
+    };
+    let mut buckets: BTreeMap<u32, B> = BTreeMap::new();
+    let (mut putthrough, mut n_putthrough) = (0.0, 0u64);
+    for s in latest.values() {
+        let Some(m) = minute_of(s) else { continue };
+        let value = s
+            .features
+            .get("group")
+            .and_then(|g| g.get("total_value"))
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        match super::outcome::family(&s.kind) {
+            "block_order" | "block_auction" => {
+                let b = buckets.entry(m).or_default();
+                match s.side {
+                    crate::core::models::Side::Buy => {
+                        b.buy += value;
+                        b.n_buy += 1;
+                    }
+                    crate::core::models::Side::Sell => {
+                        b.sell += value;
+                        b.n_sell += 1;
+                    }
+                    crate::core::models::Side::Unknown => {}
+                }
+            }
+            "absorption" => buckets.entry(m).or_default().absorption += 1,
+            "accumulation" => buckets.entry(m).or_default().accumulation += 1,
+            _ => {
+                putthrough += value;
+                n_putthrough += 1;
+            }
+        }
+    }
+    let (mut cum, mut buy, mut sell) = (0.0, 0.0, 0.0);
+    let rows: Vec<Value> = buckets
+        .iter()
+        .map(|(m, b)| {
+            cum += b.buy - b.sell;
+            buy += b.buy;
+            sell += b.sell;
+            json!({
+                "t": format!("{:02}:{:02}", m / 60, m % 60),
+                "buy": py_round_int(b.buy),
+                "sell": py_round_int(b.sell),
+                "net": py_round_int(b.buy - b.sell),
+                "cum_net": py_round_int(cum),
+                "n_buy": b.n_buy,
+                "n_sell": b.n_sell,
+                "absorption": b.absorption,
+                "accumulation": b.accumulation,
+            })
+        })
+        .collect();
+    let total = buy + sell;
+    json!({
+        "trading_date": trading_date.to_string(),
+        "at": at.map(|a| a.to_rfc3339()),
+        "bucket_min": bucket,
+        "buckets": rows,
+        "totals": {
+            "large_buy": py_round_int(buy),
+            "large_sell": py_round_int(sell),
+            "net_large": py_round_int(buy - sell),
+            "buy_share": if total > 0.0 { crate::core::fmt::py_round(buy / total, 4) } else { 0.0 },
+            "putthrough_value": py_round_int(putthrough),
+            "putthrough_count": n_putthrough,
+        },
+    })
 }
 
 fn parse_at(v: &str, d: chrono::NaiveDate, ctx: &ToolContext) -> Option<DateTime<Utc>> {

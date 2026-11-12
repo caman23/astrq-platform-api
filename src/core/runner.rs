@@ -4,7 +4,7 @@
 //! A tool that errors, panics or is slow only hurts itself: its queue may overflow
 //! (counted) but the bus and other tools keep running.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use parking_lot::Mutex;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -20,6 +20,13 @@ use crate::core::config::ToolEntry;
 use crate::core::metrics::METRICS;
 use crate::core::models::{MarketEvent, Signal};
 use crate::core::tool::{Subscription, Tool, ToolContext};
+
+/// Write via a temp file + rename, so a crash never leaves a half-written file.
+fn atomic_write(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, data)?;
+    std::fs::rename(&tmp, path)
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolStatus {
@@ -348,26 +355,76 @@ impl ToolRunner {
         let Some((snap, meta)) = self.snap_paths() else {
             return;
         };
-        let (data, version) = {
+        let (data, version, state_date, archive) = {
             let t = self.tool.lock();
-            (t.snapshot(), t.version().to_string())
+            (
+                t.snapshot(),
+                t.version().to_string(),
+                t.state_date(),
+                t.archive(),
+            )
         };
         let Some(data) = data else { return };
-        let today = self.ctx.calendar.trading_date(self.ctx.clock.now());
+        // label with the date the state belongs to, not the wall clock: yesterday's state
+        // saved after midnight must not be restored as today's
+        let day =
+            state_date.unwrap_or_else(|| self.ctx.calendar.trading_date(self.ctx.clock.now()));
         let write = || -> std::io::Result<()> {
             std::fs::create_dir_all(snap.parent().expect("dir"))?;
-            let tmp = snap.with_extension("tmp");
-            std::fs::write(&tmp, &data)?;
-            std::fs::rename(&tmp, &snap)?;
+            atomic_write(&snap, &data)?;
             std::fs::write(
                 &meta,
-                serde_json::json!({"version": version, "trading_date": today.to_string()})
+                serde_json::json!({"version": version, "trading_date": day.to_string()})
                     .to_string(),
-            )
+            )?;
+            // per-day archive; the last write of the day is the end-of-day snapshot
+            if let Some((d, bytes)) = &archive {
+                if let Some(path) = self.archive_path(*d) {
+                    std::fs::create_dir_all(path.parent().expect("dir"))?;
+                    atomic_write(&path, &crate::core::remote_store::gzip(bytes))?;
+                }
+            }
+            Ok(())
         };
         if let Err(e) = write() {
             tracing::warn!("tool {} snapshot failed: {e}", self.tool_id());
         }
+    }
+
+    /// `{snapshot_dir}/archive/{tool}/{YYYY-MM-DD}.json.gz`
+    pub fn archive_path(&self, d: NaiveDate) -> Option<PathBuf> {
+        let dir = self.snapshot_dir.as_ref()?;
+        Some(
+            dir.join("archive")
+                .join(self.tool_id())
+                .join(format!("{d}.json.gz")),
+        )
+    }
+
+    /// Delete archives older than `keep_days` (by date in the file name).
+    pub fn cleanup_archives(&self, today: NaiveDate, keep_days: u64) -> usize {
+        let Some(dir) = self
+            .archive_path(today)
+            .and_then(|p| p.parent().map(PathBuf::from))
+        else {
+            return 0;
+        };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return 0;
+        };
+        let cutoff = today - chrono::Duration::days(keep_days as i64);
+        let mut n = 0;
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let old = name
+                .strip_suffix(".json.gz")
+                .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+                .is_some_and(|d| d < cutoff);
+            if old && std::fs::remove_file(e.path()).is_ok() {
+                n += 1;
+            }
+        }
+        n
     }
 
     fn restore_snapshot(&self) {

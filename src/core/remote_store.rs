@@ -16,7 +16,7 @@ use hmac::{Hmac, Mac};
 use parking_lot::Mutex;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -252,6 +252,7 @@ pub struct RemoteSync {
     pub keep_days: usize,
     pub last_error: Mutex<Option<String>>,
     pub last_upload: Mutex<Option<DateTime<Utc>>>,
+    index: tokio::sync::Mutex<Option<BTreeSet<NaiveDate>>>,
 }
 
 impl RemoteSync {
@@ -262,6 +263,7 @@ impl RemoteSync {
             keep_days,
             last_error: Mutex::new(None),
             last_upload: Mutex::new(None),
+            index: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -321,9 +323,101 @@ impl RemoteSync {
             )
             .await
         {
-            Ok(()) => *self.last_upload.lock() = Some(Utc::now()),
+            Ok(()) => {
+                *self.last_upload.lock() = Some(Utc::now());
+                self.add_to_index(today).await;
+            }
             Err(e) => self.err("signals", e),
         }
+    }
+
+    // ---------------------------------------------------------------- past sessions
+
+    /// Trading dates with signals in R2 (`signals/index.json`), loaded once per process
+    /// so a disk-less host can list past sessions after a restart.
+    pub async fn dates(&self) -> BTreeSet<NaiveDate> {
+        let mut idx = self.index.lock().await;
+        if idx.is_none() {
+            let loaded = match self.client.get("signals/index.json").await {
+                Ok(Some(b)) => serde_json::from_slice(&b).unwrap_or_default(),
+                Ok(None) => BTreeSet::new(),
+                Err(e) => {
+                    self.err("index", e);
+                    return BTreeSet::new(); // retry on the next call
+                }
+            };
+            *idx = Some(loaded);
+        }
+        idx.clone().unwrap_or_default()
+    }
+
+    async fn add_to_index(&self, d: NaiveDate) {
+        let mut dates = self.dates().await;
+        if !dates.insert(d) {
+            return;
+        }
+        let skip = dates.len().saturating_sub(self.keep_days.max(1));
+        let dates: BTreeSet<NaiveDate> = dates.into_iter().skip(skip).collect();
+        let body = serde_json::to_vec(&dates).unwrap_or_default();
+        match self
+            .client
+            .put("signals/index.json", body, "application/json")
+            .await
+        {
+            Ok(()) => *self.index.lock().await = Some(dates),
+            Err(e) => self.err("index", e),
+        }
+    }
+
+    /// `archive/{tool}/{d}.json.gz` (already gzip-compressed on disk).
+    pub async fn upload_archive(&self, tool: &str, d: NaiveDate, path: &Path) {
+        let Ok(data) = std::fs::read(path) else {
+            return;
+        };
+        if let Err(e) = self
+            .client
+            .put(
+                &format!("archive/{tool}/{d}.json.gz"),
+                data,
+                "application/gzip",
+            )
+            .await
+        {
+            self.err("archive", e);
+        }
+    }
+
+    /// Bring a past session's signals and tool archives back to local disk (disk-less
+    /// hosts). Returns whether the signals file now exists locally.
+    pub async fn fetch_day(&self, d: NaiveDate, archives: &[(String, PathBuf)]) -> bool {
+        let local = self.signals_file(d);
+        let res: Result<()> = async {
+            if !local.exists() {
+                if let Some(sig) = self.client.get(&format!("signals/{d}.jsonl.gz")).await? {
+                    std::fs::create_dir_all(local.parent().expect("dir"))?;
+                    std::fs::write(&local, gunzip(&sig)?)?;
+                }
+            }
+            for (tool, path) in archives {
+                if path.exists() {
+                    continue;
+                }
+                if let Some(a) = self
+                    .client
+                    .get(&format!("archive/{tool}/{d}.json.gz"))
+                    .await?
+                {
+                    std::fs::create_dir_all(path.parent().expect("dir"))?;
+                    std::fs::write(path, a)?;
+                }
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(e) = res {
+            self.err("fetch_day", e);
+        }
+        local.exists()
     }
 
     /// Summarize today's ticks and merge into the remote summaries object.

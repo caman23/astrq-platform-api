@@ -7,7 +7,7 @@ use axum::extract::ws::Utf8Bytes;
 use chrono::{NaiveDate, Utc};
 use parking_lot::{Mutex, RwLock};
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -21,6 +21,7 @@ use crate::core::clock::{Clock, EventClock, SimClock, WallClock};
 use crate::core::config::Settings;
 use crate::core::context::{ContextProvider, ContextService, NullContextProvider};
 use crate::core::fmt::DISCLAIMER_VI;
+use crate::core::history::{self, ArchivedDay, History};
 use crate::core::ingest::{Ingest, IngestStats};
 use crate::core::market_rules::MarketRules;
 use crate::core::metrics::METRICS;
@@ -74,6 +75,8 @@ pub struct Platform {
     resub_tx: mpsc::Sender<Vec<String>>,
     resub_rx: Mutex<Option<mpsc::Receiver<Vec<String>>>>,
     jobs_done: Mutex<HashMap<&'static str, NaiveDate>>,
+    /// Past sessions loaded on demand (dashboard history).
+    pub history: History,
 }
 
 fn notify(tx: &broadcast::Sender<Utf8Bytes>, v: Value) {
@@ -303,6 +306,7 @@ impl Platform {
             resub_tx,
             resub_rx: Mutex::new(Some(resub_rx)),
             jobs_done: Mutex::new(HashMap::new()),
+            history: History::default(),
         }))
     }
 
@@ -389,7 +393,88 @@ impl Platform {
             r.upload_signals(self.calendar.trading_date(self.clock.now()))
                 .await;
         }
+        let dates: BTreeSet<NaiveDate> = self
+            .runners
+            .values()
+            .filter_map(|r| r.tool.lock().state_date())
+            .collect();
+        for d in dates {
+            self.upload_archives(d).await;
+        }
         self.started.store(false, Ordering::Relaxed);
+    }
+
+    async fn upload_archives(&self, d: NaiveDate) {
+        let Some(remote) = &self.remote else { return };
+        for (id, r) in &self.runners {
+            if let Some(path) = r.archive_path(d).filter(|p| p.exists()) {
+                remote.upload_archive(id, d, &path).await;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ past sessions
+
+    /// The session the live store holds (today, or the last one until a new one starts).
+    pub fn live_date(&self) -> NaiveDate {
+        self.store
+            .lock()
+            .trading_date
+            .unwrap_or_else(|| self.calendar.trading_date(self.clock.now()))
+    }
+
+    /// Past sessions that can be viewed: recorded locally or listed in remote storage,
+    /// within the retention window, newest first (the live date excluded).
+    pub async fn history_dates(&self) -> Vec<NaiveDate> {
+        let mut dates = BTreeSet::new();
+        if let Some(rec) = &self.signal_recorder {
+            if let Some(dir) = rec.file_for(self.live_date()).parent() {
+                dates.extend(history::local_dates(dir));
+            }
+        }
+        if let Some(r) = &self.remote {
+            dates.extend(r.dates().await);
+        }
+        let live = self.live_date();
+        let today = self.calendar.trading_date(self.clock.now());
+        let oldest = today - chrono::Duration::days(self.s.storage.retention_days as i64);
+        dates
+            .into_iter()
+            .rev()
+            .filter(|d| *d != live && *d >= oldest && *d <= today)
+            .collect()
+    }
+
+    /// Load a past session (signals + tool archives), from disk or remote storage.
+    /// Only dates listed by `history_dates` are looked up.
+    pub async fn archived_day(&self, d: NaiveDate) -> Option<Arc<ArchivedDay>> {
+        if let Some(day) = self.history.cached(d) {
+            return Some(day);
+        }
+        if !self.history_dates().await.contains(&d) {
+            return None;
+        }
+        let rec = self.signal_recorder.as_ref()?;
+        let file = rec.file_for(d);
+        let archives: Vec<(String, PathBuf)> = self
+            .runners
+            .iter()
+            .filter_map(|(id, r)| Some((id.clone(), r.archive_path(d)?)))
+            .collect();
+        let remote = self.remote.clone();
+        self.history
+            .get_or_load(d, || async move {
+                if let Some(r) = &remote {
+                    if !r.fetch_day(d, &archives).await {
+                        return None;
+                    }
+                }
+                tokio::task::spawn_blocking(move || history::read_day(d, &file, &archives))
+                    .await
+                    .ok()
+                    .flatten()
+            })
+            .await
     }
 
     /// After a restart, reload today's recorded signals so the radar is not empty.
@@ -539,10 +624,15 @@ impl Platform {
                 {
                     self.jobs_done.lock().insert("eod", d);
                     self.eod_summary().await;
+                    // end-of-day snapshot: freezes the archive of this session
+                    for r in self.runners.values() {
+                        r.save_snapshot();
+                    }
                     if let Some(r) = &self.remote {
                         r.upload_signals(d).await;
                         r.upload_day_summary(d).await;
                     }
+                    self.upload_archives(d).await;
                 }
             }
             if self.jobs_done.lock().get("cleanup") != Some(&d) {
@@ -556,6 +646,9 @@ impl Platform {
                 .flatten()
                 {
                     r.cleanup(self.s.storage.retention_days);
+                }
+                for r in self.runners.values() {
+                    r.cleanup_archives(d, self.s.storage.retention_days);
                 }
             }
             if last_universe_check.elapsed().as_secs_f64() > self.s.universe.reload_interval_sec {

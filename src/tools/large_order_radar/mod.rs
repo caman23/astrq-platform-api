@@ -58,6 +58,14 @@ struct State {
     accumulation: AccumulationDetector,
 }
 
+/// End-of-day archive: what a past session's view needs beyond its signals.
+#[derive(Serialize, Deserialize)]
+struct Archive {
+    trading_date: NaiveDate,
+    days: BTreeMap<String, DayTotals>,
+    outcomes: OutcomeBook,
+}
+
 pub struct LargeOrderRadar {
     pub cfg: RadarConfig,
     classifier: SideClassifier,
@@ -856,13 +864,59 @@ impl Tool for LargeOrderRadar {
         ctx: &ToolContext,
         params: &HashMap<String, String>,
     ) -> Option<Value> {
+        // the date the data belongs to: after midnight / on a weekend the radar still
+        // holds the last session until the next one starts
+        let date = self
+            .trading_date
+            .unwrap_or_else(|| ctx.calendar.trading_date(ctx.clock.now()));
         Some(view::build_view(
             signals,
             ctx,
             params,
+            date,
             &self.days,
             &self.outcomes,
         ))
+    }
+
+    fn state_date(&self) -> Option<NaiveDate> {
+        self.trading_date
+    }
+
+    fn archive(&self) -> Option<(NaiveDate, Vec<u8>)> {
+        let d = self.trading_date?;
+        let a = Archive {
+            trading_date: d,
+            days: self.days.clone(),
+            outcomes: self.outcomes.clone(),
+        };
+        Some((d, serde_json::to_vec(&a).ok()?))
+    }
+
+    fn archive_view(
+        &self,
+        archive: Option<&[u8]>,
+        signals: &[Arc<Signal>],
+        date: NaiveDate,
+        ctx: &ToolContext,
+        params: &HashMap<String, String>,
+    ) -> Option<Value> {
+        // Without an archive (days recorded before archives existed) the view still works
+        // from the signals' own snapshots; only follow-through and accuracy are missing.
+        let a: Archive = archive
+            .and_then(|b| serde_json::from_slice(b).ok())
+            .filter(|a: &Archive| a.trading_date == date)
+            .unwrap_or_else(|| Archive {
+                trading_date: date,
+                days: BTreeMap::new(),
+                outcomes: OutcomeBook::default(),
+            });
+        let mut v = view::build_view(signals, ctx, params, date, &a.days, &a.outcomes);
+        if let Some(o) = v.as_object_mut() {
+            o.insert("archived".into(), json!(true));
+            o.insert("has_outcomes".into(), json!(archive.is_some()));
+        }
+        Some(v)
     }
 
     fn daily_summary(&self, _ctx: &ToolContext) -> Option<String> {

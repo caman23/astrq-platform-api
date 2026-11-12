@@ -2,7 +2,7 @@
 //! data provider directly. Adding a tool must not require changing the core.
 
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use parking_lot::RwLock;
 use serde::Serialize;
 use serde_json::Value;
@@ -114,6 +114,28 @@ pub trait Tool: Send {
     }
     /// Optional end-of-session report (Vietnamese).
     fn daily_summary(&self, _ctx: &ToolContext) -> Option<String> {
+        None
+    }
+    /// Trading date the tool's in-memory state belongs to (None = unknown / stateless).
+    /// Snapshots are labelled with it, so yesterday's state saved after midnight is not
+    /// mistaken for today's.
+    fn state_date(&self) -> Option<NaiveDate> {
+        None
+    }
+    /// Compact end-of-day state kept per trading date, so a past session can still be
+    /// viewed after the tool has moved on (None = the tool keeps no archive).
+    fn archive(&self) -> Option<(NaiveDate, Vec<u8>)> {
+        None
+    }
+    /// View of a past session from its archive (if one was saved) and that day's signals.
+    fn archive_view(
+        &self,
+        _archive: Option<&[u8]>,
+        _signals: &[Arc<Signal>],
+        _date: NaiveDate,
+        _ctx: &ToolContext,
+        _params: &HashMap<String, String>,
+    ) -> Option<Value> {
         None
     }
 }

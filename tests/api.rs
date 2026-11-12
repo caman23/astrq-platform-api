@@ -34,7 +34,12 @@ async fn serve(
     let app = astrq::api::router(p.clone());
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", l.local_addr().unwrap());
-    let h = tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    let limits = p.s.api.limits.clone();
+    let h = tokio::spawn(async move {
+        astrq::api::server::serve(l, app, &limits, std::future::pending())
+            .await
+            .unwrap()
+    });
     (base, p, h)
 }
 
@@ -51,9 +56,14 @@ async fn api_end_to_end() {
         .unwrap()
         .to_string();
     assert!(
-        csp.starts_with("frame-ancestors 'self'") && csp.contains("https://*.astrq.io.vn"),
+        csp.contains("frame-ancestors 'self'")
+            && csp.contains("https://*.astrq.io.vn")
+            && csp.contains("script-src 'self'")
+            && csp.contains("object-src 'none'"),
         "{csp}"
     );
+    assert_eq!(r.headers()["x-content-type-options"], "nosniff");
+    assert!(r.headers().contains_key("referrer-policy"));
     assert_eq!(r.json::<Value>().await.unwrap()["status"], "ok");
 
     let deadline = Instant::now() + Duration::from_secs(25);
@@ -475,6 +485,34 @@ async fn view_follow_through_timeline_and_sectors() {
         nets.windows(2).all(|w| w[0] >= w[1]),
         "sorted from net buying to net selling"
     );
+
+    // market flow curve: buckets aligned, cumulative net adds up, totals match
+    let f: Value = get("?flow=1&bucket=15")
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(f["bucket_min"], 15);
+    let buckets = f["buckets"].as_array().expect("buckets");
+    assert!(!buckets.is_empty());
+    let (mut cum, mut buy) = (0i64, 0i64);
+    let mut prev = String::new();
+    for b in buckets {
+        let t = b["t"].as_str().unwrap().to_string();
+        assert!(t > prev, "buckets ascending");
+        assert_eq!(t[3..].parse::<u32>().unwrap() % 15, 0, "aligned to 15 min");
+        cum += b["net"].as_i64().unwrap();
+        buy += b["buy"].as_i64().unwrap();
+        assert!((cum - b["cum_net"].as_i64().unwrap()).abs() <= buckets.len() as i64);
+        prev = t;
+    }
+    assert!((buy - f["totals"]["large_buy"].as_i64().unwrap()).abs() <= buckets.len() as i64);
+    // unsupported bucket falls back to 5 min; `at` cuts the curve
+    let f5: Value = get("?flow=1&bucket=7").await.unwrap().json().await.unwrap();
+    assert_eq!(f5["bucket_min"], 5);
+    let early: Value = get("?flow=1&at=09:00").await.unwrap().json().await.unwrap();
+    assert!(early["buckets"].as_array().unwrap().len() <= f5["buckets"].as_array().unwrap().len());
     platform.stop().await;
     server.abort();
 }
@@ -521,6 +559,248 @@ async fn dashboard_cache_headers() {
         .headers()
         .get("cache-control")
         .is_none());
+    platform.stop().await;
+    server.abort();
+}
+
+/// End-of-day archive + viewing a past session (`?date=`), across a restart.
+#[tokio::test(flavor = "multi_thread")]
+async fn past_sessions_are_viewable_after_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (base, platform, server) = serve(settings(tmp.path())).await;
+    let c = reqwest::Client::new();
+    // run until some orders have a 5-minute outcome
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        let v: Value = c
+            .get(format!("{base}/api/tools/large_order_radar/view"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if v["symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|s| s["orders"].as_array().unwrap())
+            .any(|o| o["outcome"]["5m"].is_number())
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    let h: Value = c
+        .get(format!("{base}/api/history"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let live: chrono::NaiveDate = h["live_date"].as_str().unwrap().parse().unwrap();
+    let runner = platform.runners["large_order_radar"].clone();
+    platform.stop().await; // final snapshot + archive
+    server.abort();
+    let archive = runner.archive_path(live).unwrap();
+    assert!(archive.exists(), "archive written at stop: {archive:?}");
+
+    // Pretend that session was yesterday: rename its files and the date inside the archive.
+    let past = live - chrono::Duration::days(1);
+    let data = tmp.path();
+    std::fs::rename(
+        data.join(format!("signals/{live}.jsonl")),
+        data.join(format!("signals/{past}.jsonl")),
+    )
+    .unwrap();
+    let raw = astrq::core::remote_store::gunzip(&std::fs::read(&archive).unwrap()).unwrap();
+    let raw = String::from_utf8(raw).unwrap().replacen(
+        &format!("\"trading_date\":\"{live}\""),
+        &format!("\"trading_date\":\"{past}\""),
+        1,
+    );
+    std::fs::write(
+        runner.archive_path(past).unwrap(),
+        astrq::core::remote_store::gzip(raw.as_bytes()),
+    )
+    .unwrap();
+    std::fs::remove_file(&archive).unwrap();
+    let _ = std::fs::remove_dir_all(data.join("snapshots/large_order_radar.snap"));
+
+    // restart: the live radar starts empty, the past session is listed and viewable
+    let (base, platform, server) = serve(settings(tmp.path())).await;
+    let get = |q: &str| c.get(format!("{base}{q}")).send();
+    let h: Value = get("/api/history").await.unwrap().json().await.unwrap();
+    assert!(
+        h["dates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d == &past.to_string()),
+        "{h}"
+    );
+    let v: Value = get(&format!("/api/tools/large_order_radar/view?date={past}"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(v["archived"], true);
+    assert_eq!(v["has_outcomes"], true);
+    assert_eq!(v["trading_date"], past.to_string());
+    let syms = v["symbols"].as_array().unwrap();
+    assert!(!syms.is_empty());
+    assert!(
+        syms.iter()
+            .flat_map(|s| s["orders"].as_array().unwrap())
+            .any(|o| o["outcome"]["5m"].is_number()),
+        "follow-through restored from the archive"
+    );
+    assert!(v["stats"]["rows"].as_array().is_some_and(|r| !r.is_empty()));
+    // every mode works on the past session
+    let sym = syms[0]["symbol"].as_str().unwrap();
+    for q in [
+        format!("?date={past}&symbol={sym}"),
+        format!("?date={past}&sectors=1"),
+        format!("?date={past}&flow=1&bucket=15"),
+        format!("?date={past}&at=09:30"),
+    ] {
+        let r = get(&format!("/api/tools/large_order_radar/view{q}"))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 200, "{q}");
+        let v: Value = r.json().await.unwrap();
+        assert_eq!(v["trading_date"], past.to_string(), "{q}");
+    }
+    let sigs: Value = get(&format!(
+        "/api/signals?tool_id=large_order_radar&limit=50&date={past}"
+    ))
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let sigs = sigs.as_array().unwrap();
+    assert!(!sigs.is_empty() && sigs.len() <= 50);
+    // bad and unknown dates
+    assert_eq!(
+        get("/api/tools/large_order_radar/view?date=13-11-2026")
+            .await
+            .unwrap()
+            .status(),
+        422
+    );
+    assert_eq!(
+        get("/api/tools/large_order_radar/view?date=2001-01-01")
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+    assert_eq!(
+        get("/api/tools/large_order_radar/view?date=../../etc")
+            .await
+            .unwrap()
+            .status(),
+        422
+    );
+    platform.stop().await;
+    server.abort();
+}
+
+/// Abuse limits: per-IP rate limit, normalized cache keys, /metrics, WebSocket quota,
+/// slow-loris header timeout.
+#[tokio::test(flavor = "multi_thread")]
+async fn abuse_limits() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut s = settings(tmp.path());
+    s.api.limits.per_ip_per_sec = 2.0;
+    s.api.limits.per_ip_burst = 6.0;
+    s.api.limits.max_ws_per_ip = 1;
+    s.api.limits.header_timeout_sec = 1.0;
+    let (base, platform, server) = serve(s).await;
+    let c = reqwest::Client::new();
+
+    // rate limit: the burst passes, then 429 with Retry-After; /health is never limited
+    let mut codes = vec![];
+    for _ in 0..10 {
+        let r = c.get(format!("{base}/api/status")).send().await.unwrap();
+        if r.status() == 429 {
+            assert!(r.headers().contains_key("retry-after"));
+        }
+        codes.push(r.status().as_u16());
+    }
+    assert!(codes[..6].iter().all(|c| *c == 200), "{codes:?}");
+    assert!(codes.contains(&429), "{codes:?}");
+    for _ in 0..20 {
+        assert_eq!(
+            c.get(format!("{base}/health"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            200
+        );
+    }
+    // another client (behind our local proxy) has its own budget
+    let other = c
+        .get(format!("{base}/api/status"))
+        .header("cf-connecting-ip", "198.51.100.77")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(other.status(), 200);
+
+    // /metrics: direct local request yes, through the proxy no
+    let as_client = |ip: &'static str| {
+        let c = c.clone();
+        let base = base.clone();
+        async move {
+            c.get(format!("{base}/metrics"))
+                .header("cf-connecting-ip", ip)
+                .send()
+                .await
+                .unwrap()
+                .status()
+        }
+    };
+    assert_eq!(as_client("198.51.100.78").await, 404);
+
+    // unknown symbols are rejected instead of creating cache entries
+    let r = c
+        .get(format!(
+            "{base}/api/tools/large_order_radar/view?symbol=NOPE123"
+        ))
+        .header("cf-connecting-ip", "198.51.100.79")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404);
+
+    // WebSocket: one live connection per client here
+    let ws_url = base.replace("http://", "ws://") + "/ws";
+    tokio::time::sleep(Duration::from_secs(4)).await; // refill the local bucket
+    let (_ws1, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
+    let second = tokio_tungstenite::connect_async(&ws_url).await;
+    assert!(
+        second.is_err(),
+        "second WebSocket from the same client refused"
+    );
+
+    // slow-loris: headers never finished → the server hangs up
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let addr = base.trim_start_matches("http://").to_string();
+    let mut sock = tokio::net::TcpStream::connect(&addr).await.unwrap();
+    sock.write_all(b"GET /api/status HTTP/1.1\r\nHost: x\r\n")
+        .await
+        .unwrap();
+    let mut buf = [0u8; 256];
+    let closed = tokio::time::timeout(Duration::from_secs(5), sock.read(&mut buf)).await;
+    assert!(
+        matches!(closed, Ok(Ok(_)) | Ok(Err(_))),
+        "connection closed after the header timeout"
+    );
     platform.stop().await;
     server.abort();
 }

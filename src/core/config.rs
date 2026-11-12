@@ -497,6 +497,63 @@ pub struct ApiConfig {
     pub origin_secret: Option<Secret>,
     /// Allow enabling/disabling tools from the web UI/API (off on public deployments).
     pub allow_tool_control: bool,
+    /// Abuse limits (rate limiting, connection caps, timeouts).
+    pub limits: ApiLimits,
+    /// Serve `/metrics` to everyone. Off: only direct local requests (not through the
+    /// tunnel/proxy) or `Authorization: Bearer <metrics_token>` may read it.
+    pub metrics_public: bool,
+    pub metrics_token: Option<Secret>,
+    /// Believe `CF-Connecting-IP` / `X-Forwarded-For` from any peer. Needed behind a PaaS
+    /// proxy whose address is not on a private network (e.g. Render) when no
+    /// `origin_secret` is set; otherwise all visitors would share one rate-limit budget.
+    /// (Loopback / private-network proxies and requests with the origin secret are
+    /// trusted anyway.)
+    pub trust_proxy_headers: bool,
+}
+
+/// Defense in depth against floods. Cloudflare in front absorbs volumetric DDoS; these
+/// keep a single client (or a burst that gets through) from exhausting the process.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ApiLimits {
+    pub enabled: bool,
+    /// Sustained requests per second per client IP (token bucket refill).
+    pub per_ip_per_sec: f64,
+    /// Burst size per client IP (bucket capacity).
+    pub per_ip_burst: f64,
+    /// Requests being handled at once (beyond that: 503, try again).
+    pub max_in_flight: usize,
+    /// Open TCP connections (beyond that new connections are closed immediately).
+    pub max_connections: usize,
+    /// WebSocket clients in total / per IP.
+    pub max_ws: usize,
+    pub max_ws_per_ip: usize,
+    /// Time allowed to send the request headers (slow-loris).
+    pub header_timeout_sec: f64,
+    /// Time allowed to produce a response (WebSocket sessions excluded).
+    pub request_timeout_sec: f64,
+    /// Concurrent view builds (cache misses); waiting longer than this many seconds → 503.
+    pub max_builds: usize,
+    pub build_wait_sec: f64,
+}
+
+impl Default for ApiLimits {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            // a dashboard needs ~1 req/s, ~7/s while scrubbing the timeline
+            per_ip_per_sec: 15.0,
+            per_ip_burst: 90.0,
+            max_in_flight: 256,
+            max_connections: 4096,
+            max_ws: 2000,
+            max_ws_per_ip: 8,
+            header_timeout_sec: 10.0,
+            request_timeout_sec: 20.0,
+            max_builds: 4,
+            build_wait_sec: 8.0,
+        }
+    }
 }
 
 impl Default for ApiConfig {
@@ -513,6 +570,10 @@ impl Default for ApiConfig {
             ],
             origin_secret: None,
             allow_tool_control: true,
+            limits: ApiLimits::default(),
+            metrics_public: false,
+            metrics_token: None,
+            trust_proxy_headers: false,
         }
     }
 }

@@ -23,6 +23,8 @@ dotenvy = "0.15"
 flate2 = "1"
 futures-util = "0.3"
 hex = "0.4"
+hyper = "1"
+hyper-util = { version = "0.1", features = ["server", "server-auto", "server-graceful", "service", "tokio", "http1", "http2"] }
 hmac = "0.12"
 parking_lot = "0.12"
 rand = "0.8"
@@ -37,6 +39,7 @@ serde_yaml = "0.9"
 sha2 = "0.10"
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["cors", "compression-gzip", "fs", "set-header"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
@@ -45,7 +48,6 @@ uuid = { version = "1", features = ["v5"] }
 [dev-dependencies]
 http-body-util = "0.1"
 tempfile = "3"
-tower = { version = "0.5", features = ["util"] }
 
 [profile.release]
 lto = "thin"

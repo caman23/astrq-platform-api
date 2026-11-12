@@ -11,7 +11,19 @@ Signals: block trades and split parent orders, **absorption** (one-sided large f
 price does not follow), **stealth accumulation/distribution** (regular medium-sized
 same-side trades below the large-trade bar), auction and put-through blocks. The
 dashboard adds an accuracy table (share of orders whose price moved their way), a
-timeline to replay the day, and a sector heatmap of net large-order flow.
+timeline to replay the day, a sector heatmap of net large-order flow and a market
+flow chart (buy/sell per 1/5/15/30 minutes + cumulative net). Viewers can star symbols
+into a watchlist (filter ★), get sound + desktop notifications for alerts (all or
+watchlist only), and export the VN100 table as CSV — all kept in the browser.
+
+**Past sessions:** every tool snapshot also writes a compact per-day archive
+(`data/snapshots/archive/<tool>/YYYY-MM-DD.json.gz`: day totals + follow-through of every
+order, ~50 KB); the last one written after the close is the end-of-day snapshot. With the
+day's recorded signals it lets the dashboard reopen any session still within
+`storage.retention_days` (date picker next to the title, or `/?date=YYYY-MM-DD`) — radar,
+timeline, sectors, flow, accuracy table. Outside trading hours an empty live radar opens the
+last session automatically. On disk-less hosts the archive and signals go to R2 and are
+fetched back on demand.
 
 > Thông tin chỉ mang tính tham khảo, không phải khuyến nghị đầu tư.
 > The system never places orders or touches trading accounts.
@@ -130,8 +142,33 @@ docs/          architecture, ADRs (0006: Rust rewrite), provider notes, writing-
 | `GET /health`, `GET /ready`, `GET /metrics` | liveness, readiness, Prometheus text |
 | `GET /api/status` | clock, session, feed status, tick rate, feed vs internal latency, tools |
 | `GET /api/tools` · `POST /api/tools/{id}/enabled` | manifests/config/status · enable/disable |
-| `GET /api/tools/large_order_radar/view` | radar overview for today: newest 5 orders per symbol, last 8 trades of the newest one, each order's `outcome` (price 5/15/30 min later and now) and the `stats` accuracy table. `?symbol=X`: everything for X · `?full=1`: v1-sized document · `?at=HH:MM`: the radar as it was at that time · `?sectors=1`: per-sector heatmap data |
-| `GET /api/signals?symbol=&side=&min_severity=&limit=` | today's signals |
+| `GET /api/tools/large_order_radar/view` | radar overview for today: newest 5 orders per symbol, last 8 trades of the newest one, each order's `outcome` (price 5/15/30 min later and now) and the `stats` accuracy table. `?symbol=X`: everything for X · `?full=1`: v1-sized document · `?at=HH:MM`: the radar as it was at that time · `?sectors=1`: per-sector heatmap data · `?flow=1&bucket=5`: market-wide large buy/sell per bucket (1·5·15·30 min) with cumulative net, also with `at` |
+| `GET /api/signals?symbol=&side=&min_severity=&limit=&date=` | today's signals (or a past session's) |
+| `GET /api/history` | `live_date` and the past sessions that can be viewed (`dates`) |
+| any view above `&date=YYYY-MM-DD` | the same view for a past session (`archived: true`) |
 | `WS /ws` | `hello`, `status` (1 s), `signal`, `alert`, `summary` messages |
 
 See `docs/architecture.md` for the design and `docs/writing-a-tool.md` to add a tool.
+
+## Security & abuse limits
+
+Read-only service; there is no trading endpoint and nothing user-supplied reaches a file
+path, shell, or outbound URL (dates are parsed, symbols must be in the universe). Large
+floods are Cloudflare's job — keep the origin reachable only through Cloudflare (tunnel,
+or `api.origin_secret` on Render). The process itself also defends (`api.limits` in
+`config/settings.yaml`, all on by default):
+
+| Threat | Defense |
+|---|---|
+| One client hammering the API | token bucket per IP (15 req/s, burst 90; IPv6 per /64) → `429` + `Retry-After`; `/health` exempt |
+| Spoofed client IP | `CF-Connecting-IP` / `X-Forwarded-For` only believed from the local tunnel, a private-network proxy, requests carrying the origin secret, or with `api.trust_proxy_headers` |
+| Many slow requests / overload | ≤ 256 requests in flight (`503` beyond), 20 s response timeout |
+| Cache-busting queries | unknown params dropped, numbers clamped, `at` → `HH:MM`, unknown symbols `404`; per-key single flight; ≤ 4 concurrent builds, `503` after 8 s wait; 32 MB cache cap |
+| Slow-loris / socket exhaustion | 10 s header-read timeout, ≤ 4096 connections (extra ones closed at once), HTTP/2 ≤ 64 streams |
+| WebSocket floods | ≤ 2000 clients, ≤ 8 per IP, 4 KB max frame, 10 s send timeout |
+| Internals exposure | `/metrics` only for direct local requests or `api.metrics_token` |
+| Clickjacking / XSS hardening | CSP (`script-src 'self'`, `object-src 'none'`, `frame-ancestors` allow-list), `nosniff`, `Referrer-Policy`, `Permissions-Policy`, `COOP` |
+
+Recommended on Cloudflare (free plan): a WAF rate-limiting rule on `/api/*` and `/ws`
+(e.g. 120 requests / 10 s per IP → block 1 min), Bot Fight Mode, and the origin secret
+transform rule from `docs/deploy-render.md`.

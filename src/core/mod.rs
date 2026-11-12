@@ -4,6 +4,7 @@ pub mod clock;
 pub mod config;
 pub mod context;
 pub mod fmt;
+pub mod history;
 pub mod ingest;
 pub mod market_rules;
 pub mod metrics;

@@ -106,3 +106,15 @@ api:
   # e.g. "https://blog.example.com". Keep "'self'" (with the inner quotes) as the first item.
   frame_ancestors: ["'self'", "https://astrq.io.vn", "https://*.astrq.io.vn","http://localhost:5500"]
   frontend_dist: frontend/dist
+  # Abuse limits (defaults shown; see README "Security & abuse limits").
+  # limits:
+  #   per_ip_per_sec: 15
+  #   per_ip_burst: 90
+  #   max_in_flight: 256
+  #   max_connections: 4096
+  #   max_ws: 2000
+  #   max_ws_per_ip: 8
+  #   header_timeout_sec: 10
+  #   request_timeout_sec: 20
+  # metrics_token: set to read /metrics remotely with "Authorization: Bearer <token>"
+  # trust_proxy_headers: false   # true behind a public-IP proxy without origin_secret

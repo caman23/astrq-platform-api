@@ -227,9 +227,7 @@ async fn serve(
         .await
         .with_context(|| format!("binding {host}:{port}"))?;
     tracing::info!("listening on http://{host}:{port}");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    astrq::api::server::serve(listener, app, &platform.s.api.limits, shutdown_signal()).await?;
     tracing::info!("shutting down");
     platform.stop().await;
     Ok(())
