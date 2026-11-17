@@ -804,3 +804,89 @@ async fn abuse_limits() {
     platform.stop().await;
     server.abort();
 }
+
+/// Indicator screener: catalog, presets, scans on (synthetic) daily bars, validation.
+#[tokio::test(flavor = "multi_thread")]
+async fn indicator_screener_on_demand() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (base, platform, server) = serve(settings(tmp.path())).await;
+    let c = reqwest::Client::new();
+    let meta: Value = c
+        .get(format!("{base}/api/screener/meta"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(meta["source"], "synthetic");
+    assert!(meta["indicators"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|i| i["id"] == "rsi"));
+    let presets = meta["presets"].as_array().unwrap().clone();
+    assert!(presets.len() >= 5);
+
+    let run = |body: Value| {
+        let c = c.clone();
+        let url = format!("{base}/api/screener/run");
+        async move { c.post(url).json(&body).send().await.unwrap() }
+    };
+    // a wide screen matches many symbols, the opposite one the complement
+    let up = run(serde_json::json!({"conditions": [{"left": {"ind": "close"}, "op": "gt", "right": {"ind": "sma", "n": 50}}]})).await;
+    assert_eq!(up.status(), 200);
+    let up: Value = up.json().await.unwrap();
+    let down: Value = run(serde_json::json!({"conditions": [{"left": {"ind": "close"}, "op": "lte", "right": {"ind": "sma", "n": 50}}]}))
+        .await
+        .json()
+        .await
+        .unwrap();
+    let scanned = up["scanned"].as_u64().unwrap();
+    assert!(scanned >= 90, "{up}");
+    assert_eq!(
+        up["matched"].as_u64().unwrap() + down["matched"].as_u64().unwrap(),
+        scanned
+    );
+    let row = &up["rows"][0];
+    assert!(row["close"].as_f64().unwrap() > 0.0);
+    assert!(row["values"]["sma(50)"].as_f64().unwrap() < row["close"].as_f64().unwrap());
+    assert!(row["spark"].as_array().unwrap().len() == 40);
+    assert_eq!(up["columns"][0]["label"], "MA50");
+
+    // every preset runs
+    for p in &presets {
+        let r = run(serde_json::json!({"conditions": p["conditions"]})).await;
+        assert_eq!(r.status(), 200, "{}", p["id"]);
+    }
+    // restricted to a watchlist; unknown symbols ignored
+    let w: Value = run(
+        serde_json::json!({"symbols": ["FPT", "VCB", "NOPE"], "logic": "any",
+        "conditions": [{"left": {"ind": "rsi"}, "op": "gte", "right": {"value": 0}}]}),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(w["requested"], 2);
+    // validation
+    for bad in [
+        serde_json::json!({"conditions": []}),
+        serde_json::json!({"conditions": [{"left": {"ind": "rsi", "n": 9999}, "op": "gt", "right": {"value": 1}}]}),
+        serde_json::json!({"conditions": [{"left": {"ind": "evil"}, "op": "gt", "right": {"value": 1}}]}),
+        serde_json::json!({"nonsense": true, "conditions": "x"}),
+    ] {
+        assert_eq!(run(bad.clone()).await.status(), 422, "{bad}");
+    }
+    let big = "x".repeat(40_000);
+    let r = c
+        .post(format!("{base}/api/screener/run"))
+        .header("content-type", "application/json")
+        .body(format!("{{\"logic\":\"{big}\"}}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 413, "body limit");
+    platform.stop().await;
+    server.abort();
+}

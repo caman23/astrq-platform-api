@@ -76,3 +76,18 @@ docs say does not exist, different field names) **the docs win**.
 4. If the subscribe is rejected for too many streams, reduce `provider.dnse.channels`
    (e.g. drop `expected_price.G1`) and report back — sharding across connections is next.
 5. Keep raw lines from `data/raw/dnse/` as fixtures in `backend-rs/tests/vendors.rs`.
+
+## DNSE OpenAPI REST — daily bars for the indicator screener (`backend-rs/src/screener/bars.rs`)
+
+Sources: **doc** = developers.dnse.com.vn "Lịch sử OHLC" (OpenAPI v2 spec), "Xác thực",
+"Rate Limits"; **sdk** = official `dnse` 0.5.0 (`_hmac_signer.py`, `_http.py`).
+**live** = `astrq screener-check` on 2026-11-18 (FPT, VCB, HPG; full VN100 scan, 0 errors).
+
+| Item | Status | Value / handling |
+|---|---|---|
+| Endpoint | doc + live | `GET https://openapi.dnse.com.vn/price/ohlc?symbol=&type=STOCK&resolution=1D&from=&to=` (from/to Unix s) |
+| Auth | doc + sdk + live | `x-api-key`, `x-aux-date` (RFC 1123, UTC, ±1 min), `X-Signature: Signature keyId=…,algorithm="hmac-sha256",headers="(request-target) x-aux-date",signature=<url-encoded base64 HMAC-SHA256(secret, "(request-target): get /price/ohlc\nx-aux-date: <date>\nnonce: <n>")>,nonce=<uuid4 hex>`; path signed **without** the query string (as the SDK does) |
+| Response | doc + live | column arrays `t,o,h,l,c,v`, `nextTime` (0 = complete). 4 years (1024 bars) came in one response |
+| Price unit | live | thousand VND (FPT 49.4) → ×1000 via `provider.dnse.price_unit: auto` |
+| Rate limit | doc | Get OHLC: 50,000 / hour, 100,000 / day per API key; full scan ≈ 100 requests, cached |
+| `nextTime` paging direction | **unverified** | not needed so far; both directions handled (max 6 pages) |

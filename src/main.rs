@@ -107,6 +107,13 @@ enum Cmd {
     },
     /// Test Cloudflare R2 credentials (write + read back)
     R2Check,
+    /// Fetch daily bars for the indicator screener (DNSE OpenAPI) and print them
+    ScreenerCheck {
+        #[arg(long, default_value = "FPT")]
+        symbol: String,
+        #[arg(long, default_value_t = 30)]
+        days: i64,
+    },
 }
 
 fn setup_logging(level: &str, json_logs: bool) {
@@ -185,6 +192,9 @@ async fn run(cli: Cli) -> Result<()> {
             dry_run,
         } => ssi_universe(load_settings(cfg, true)?, index, out, dry_run).await,
         Cmd::R2Check => r2_check(load_settings(cfg, true)?).await,
+        Cmd::ScreenerCheck { symbol, days } => {
+            screener_check(load_settings(cfg, true)?, symbol, days).await
+        }
     }
 }
 
@@ -607,6 +617,35 @@ async fn r2_check(s: Settings) -> Result<()> {
         }
         Ok(_) => bail!("✖ Đọc lại không khớp nội dung vừa ghi"),
         Err(e) => bail!("✖ {e}{}", hint(&e)),
+    }
+    Ok(())
+}
+
+async fn screener_check(s: Settings, symbol: String, days: i64) -> Result<()> {
+    use astrq::screener::bars::{BarsSource, DnseBars};
+    let tz: chrono_tz::Tz = s
+        .sessions
+        .timezone
+        .parse()
+        .unwrap_or(chrono_tz::Asia::Ho_Chi_Minh);
+    let Some(src) = DnseBars::new(&s.screener, &s.provider.dnse, tz) else {
+        anyhow::bail!("set ASTRQ_PROVIDER__DNSE__API_KEY and ..._API_SECRET in .env");
+    };
+    let to = chrono::Utc::now().with_timezone(&tz).date_naive();
+    let from = to - chrono::Duration::days(days);
+    let t0 = std::time::Instant::now();
+    let bars = src.daily(&symbol.to_ascii_uppercase(), from, to).await?;
+    println!(
+        "DNSE /price/ohlc {symbol} 1D {from}..{to}: {} bars in {} ms (date header: {})",
+        bars.len(),
+        t0.elapsed().as_millis(),
+        s.screener.dnse_date_header
+    );
+    for b in bars.iter().rev().take(5).rev() {
+        println!(
+            "  {}  O {:>9} H {:>9} L {:>9} C {:>9}  V {:>12}",
+            b.date, b.open, b.high, b.low, b.close, b.volume
+        );
     }
     Ok(())
 }

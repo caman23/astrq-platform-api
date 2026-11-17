@@ -593,6 +593,41 @@ pub struct Settings {
     pub storage: StorageConfig,
     pub context: ContextConfig,
     pub api: ApiConfig,
+    pub screener: ScreenerConfig,
+}
+
+/// On-demand indicator screener (daily bars). Not realtime: bars are fetched when a
+/// user runs a scan and cached.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ScreenerConfig {
+    /// "auto" (DNSE when its API key is set, else synthetic) | "dnse" | "synthetic"
+    pub source: String,
+    /// Calendar days of history to load (~0.7 trading days each; 420 ≈ 290 bars, MA200 ok).
+    pub lookback_days: i64,
+    /// Parallel bar requests while refreshing the universe.
+    pub concurrency: usize,
+    /// Bars are reused this long while the market is open / closed.
+    pub ttl_open_sec: f64,
+    pub ttl_closed_sec: f64,
+    /// DNSE OpenAPI REST base URL (official SDK default).
+    pub dnse_rest_url: String,
+    /// Date header used for request signing: "x-aux-date" (as the OHLC spec lists) or "date".
+    pub dnse_date_header: String,
+}
+
+impl Default for ScreenerConfig {
+    fn default() -> Self {
+        Self {
+            source: "auto".into(),
+            lookback_days: 420,
+            concurrency: 6,
+            ttl_open_sec: 600.0,
+            ttl_closed_sec: 6.0 * 3600.0,
+            dnse_rest_url: "https://openapi.dnse.com.vn".into(),
+            dnse_date_header: "x-aux-date".into(),
+        }
+    }
 }
 
 impl Default for Settings {
@@ -610,6 +645,7 @@ impl Default for Settings {
             storage: StorageConfig::default(),
             context: ContextConfig::default(),
             api: ApiConfig::default(),
+            screener: ScreenerConfig::default(),
         }
     }
 }

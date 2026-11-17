@@ -39,6 +39,7 @@ use crate::providers::replay::ReplayProvider;
 use crate::providers::ssi::SsiProvider;
 use crate::providers::synthetic::{SyntheticContextProvider, SyntheticProvider};
 use crate::providers::{MarketDataProvider, RawSink, StatusHandle};
+use crate::screener::Screener;
 use crate::tools::build_tool;
 
 pub struct Platform {
@@ -77,6 +78,8 @@ pub struct Platform {
     jobs_done: Mutex<HashMap<&'static str, NaiveDate>>,
     /// Past sessions loaded on demand (dashboard history).
     pub history: History,
+    /// On-demand indicator screener (daily bars).
+    pub screener: Arc<Screener>,
 }
 
 fn notify(tx: &broadcast::Sender<Utf8Bytes>, v: Value) {
@@ -274,6 +277,13 @@ impl Platform {
             ))
         });
         let (resub_tx, resub_rx) = mpsc::channel(4);
+        let screener = Screener::new(
+            &s,
+            universe.clone(),
+            calendar.clone(),
+            rules.clone(),
+            clock.clone(),
+        );
 
         Ok(Arc::new(Self {
             s,
@@ -307,6 +317,7 @@ impl Platform {
             resub_rx: Mutex::new(Some(resub_rx)),
             jobs_done: Mutex::new(HashMap::new()),
             history: History::default(),
+            screener,
         }))
     }
 

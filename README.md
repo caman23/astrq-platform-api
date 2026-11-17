@@ -16,6 +16,18 @@ flow chart (buy/sell per 1/5/15/30 minutes + cumulative net). Viewers can star s
 into a watchlist (filter ★), get sound + desktop notifications for alerts (all or
 watchlist only), and export the VN100 table as CSV — all kept in the browser.
 
+**Indicator screener (Lọc chỉ báo):** a second page (`/?view=screener`) filters VN100 by
+conditions on daily-bar indicators — MA/EMA, RSI, MACD (line/signal/hist), Bollinger
+(bands, %B), Stochastic %K, ATR %, % change, volume vs average, average traded value,
+distance from n-day high/low — compared with a number or another indicator (`>`, `≥`, `<`,
+`≤`, crosses above/below), all or any. Presets for common screens; results sortable,
+exportable, one click opens the symbol on the radar. It runs **only when asked** (not
+realtime); the large-order radar stays the default page. Daily bars come from DNSE OpenAPI
+`GET /price/ohlc` (resolution `1D`, signed with the same API key as the feed; ~100 requests
+for a full scan, cached 10 min in session / 6 h after the close) or a deterministic
+synthetic history when no DNSE key is set. `astrq screener-check --symbol FPT` tests the
+DNSE bars endpoint.
+
 **Past sessions:** every tool snapshot also writes a compact per-day archive
 (`data/snapshots/archive/<tool>/YYYY-MM-DD.json.gz`: day totals + follow-through of every
 order, ~50 KB); the last one written after the close is the end-of-day snapshot. With the
@@ -144,6 +156,7 @@ docs/          architecture, ADRs (0006: Rust rewrite), provider notes, writing-
 | `GET /api/tools` · `POST /api/tools/{id}/enabled` | manifests/config/status · enable/disable |
 | `GET /api/tools/large_order_radar/view` | radar overview for today: newest 5 orders per symbol, last 8 trades of the newest one, each order's `outcome` (price 5/15/30 min later and now) and the `stats` accuracy table. `?symbol=X`: everything for X · `?full=1`: v1-sized document · `?at=HH:MM`: the radar as it was at that time · `?sectors=1`: per-sector heatmap data · `?flow=1&bucket=5`: market-wide large buy/sell per bucket (1·5·15·30 min) with cumulative net, also with `at` |
 | `GET /api/signals?symbol=&side=&min_severity=&limit=&date=` | today's signals (or a past session's) |
+| `GET /api/screener/meta` · `POST /api/screener/run` | indicator catalog + presets · run a scan: `{"conditions": [{"left": {"ind": "rsi", "n": 14}, "op": "lt", "right": {"value": 30}}], "logic": "all", "symbols": null}` (≤ 8 conditions, body ≤ 16 KB, results cached 60 s, ≤ 2 scans at once) |
 | `GET /api/history` | `live_date` and the past sessions that can be viewed (`dates`) |
 | any view above `&date=YYYY-MM-DD` | the same view for a past session (`archived: true`) |
 | `WS /ws` | `hello`, `status` (1 s), `signal`, `alert`, `summary` messages |

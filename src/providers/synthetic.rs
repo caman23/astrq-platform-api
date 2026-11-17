@@ -30,7 +30,7 @@ const TIERS: [(&str, f64, f64, f64); 3] = [
     ("low", 25.0, 5.0, 10e6),
 ];
 
-fn seeded(label: &str) -> ChaCha8Rng {
+pub fn seeded(label: &str) -> ChaCha8Rng {
     let h = Sha256::digest(label.as_bytes());
     ChaCha8Rng::seed_from_u64(u64::from_le_bytes(h[..8].try_into().expect("8 bytes")))
 }

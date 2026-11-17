@@ -48,6 +48,11 @@ pub fn router(platform: Arc<Platform>) -> Router {
         .route("/metrics", get(metrics))
         .route("/api/status", get(status))
         .route("/api/history", get(history))
+        .route("/api/screener/meta", get(screener_meta))
+        .route(
+            "/api/screener/run",
+            post(screener_run).layer(axum::extract::DefaultBodyLimit::max(16 << 10)),
+        )
         .route("/api/universe", get(universe))
         .route("/api/signals", get(signals))
         .route("/api/alerts", get(alerts))
@@ -360,6 +365,51 @@ async fn history(State(p): State<AppState>) -> Json<Value> {
         "retention_days": p.s.storage.retention_days,
         "dates": dates,
     }))
+}
+
+// ------------------------------------------------------------------ indicator screener
+
+async fn screener_meta(State(p): State<AppState>) -> Json<Value> {
+    Json(p.screener.meta())
+}
+
+/// Run an indicator scan on demand (POST body = conditions). Results are cached for a
+/// minute per normalized request; at most two scans run at once.
+async fn screener_run(
+    State(p): State<AppState>,
+    body: Result<Json<crate::screener::ScanRequest>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    use crate::screener::ScanError;
+    let req = match body {
+        Ok(Json(req)) => req,
+        // keep the rejection's own status (413 too large, 415 wrong type, 422 bad shape)
+        Err(rej) => {
+            let status = match rej.status() {
+                StatusCode::BAD_REQUEST => StatusCode::UNPROCESSABLE_ENTITY,
+                s => s,
+            };
+            return (
+                status,
+                Json(json!({"detail": "body must be JSON: {conditions: [...], logic, symbols}"})),
+            )
+                .into_response();
+        }
+    };
+    match p.screener.run(&req).await {
+        Ok(doc) => {
+            let mut r = Json(&*doc).into_response();
+            r.headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            r
+        }
+        Err(ScanError::Invalid(m)) => unprocessable(&m),
+        Err(ScanError::Busy) => BuildError::Busy.into_response(),
+        Err(ScanError::Source(m)) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"detail": format!("nguồn dữ liệu lỗi: {m}")})),
+        )
+            .into_response(),
+    }
 }
 
 // ------------------------------------------------------------------ response cache
