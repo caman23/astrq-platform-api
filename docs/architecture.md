@@ -31,7 +31,7 @@ Large Order Radar for VN100. Design test for every decision: *adding tool #2 or
 ```
 `*` = skeleton / not implemented (see open questions).
 
-## Core components (backend-rs/src/core)
+## Core components (src/core)
 
 Rust (tokio + axum) since ADR-0006; module names below keep their v1 roles.
 

@@ -9,7 +9,9 @@
 #   ./run.sh --public     chạy kèm Cloudflare Tunnel -> https://radar.astrq.io.vn
 #                         (đổi tên: ASTRQ_PUBLIC_HOST=ten.astrq.io.vn ./run.sh --public)
 #
-# Lần đầu chạy, script tự build backend Rust (bản release) và giao diện.
+# Lần đầu chạy, script tự build backend Rust (bản release). Giao diện nằm ở repo
+# astrq-platform-ui: nếu repo đó được clone cạnh repo này (../astrq-platform-ui, hoặc
+# ASTRQ_UI_DIR=...), script build và phục vụ luôn; không có thì chỉ chạy API.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,27 +42,35 @@ die()  { printf '\033[1;31m✖ %s\033[0m\n' "$*" >&2; exit 1; }
 # ------------------------------------------------------------------ prerequisites
 export PATH="$HOME/.cargo/bin:$PATH"
 command -v cargo >/dev/null || die "Chưa có Rust. Cài: curl --proto '=https' -sSf https://sh.rustup.rs | sh"
-command -v node >/dev/null || die "Chưa có Node.js (cần ≥ 20) để build giao diện"
 
 # ------------------------------------------------------------------ backend (Rust)
-BIN=backend-rs/target/release/astrq
+BIN=target/release/astrq
 if [[ ! -x $BIN ]] || \
-   [[ -n "$(find backend-rs/src backend-rs/Cargo.toml backend-rs/Cargo.lock -newer "$BIN" -print -quit)" ]]; then
+   [[ -n "$(find src Cargo.toml Cargo.lock -newer "$BIN" -print -quit)" ]]; then
   say "Build backend Rust (lần đầu mất vài phút)…"
-  (cd backend-rs && cargo build --release --quiet)
+  cargo build --release --quiet
   ok "Đã build backend"
 fi
 
-# ------------------------------------------------------------------ frontend build
-if [[ ! -d frontend/node_modules || frontend/package.json -nt frontend/node_modules ]]; then
-  say "Cài thư viện giao diện (npm install)…"
-  (cd frontend && npm install --no-audit --no-fund --silent)
-fi
-if [[ ! -f frontend/dist/index.html ]] || \
-   [[ -n "$(find frontend/src frontend/index.html -newer frontend/dist/index.html -print -quit)" ]]; then
-  say "Build giao diện…"
-  (cd frontend && npm run build --silent >/dev/null)
-  ok "Đã build giao diện"
+# ------------------------------------------------------------------ dashboard (UI repo)
+UI_DIR="${ASTRQ_UI_DIR:-../astrq-platform-ui}"
+if [[ -f "$UI_DIR/package.json" ]]; then
+  command -v node >/dev/null || die "Chưa có Node.js (cần ≥ 20) để build giao diện"
+  if [[ ! -d $UI_DIR/node_modules || $UI_DIR/package.json -nt $UI_DIR/node_modules ]]; then
+    say "Cài thư viện giao diện (npm install)…"
+    (cd "$UI_DIR" && npm install --no-audit --no-fund --silent)
+  fi
+  if [[ ! -f $UI_DIR/dist/index.html ]] || \
+     [[ -n "$(find "$UI_DIR/src" "$UI_DIR/index.html" -newer "$UI_DIR/dist/index.html" -print -quit)" ]]; then
+    say "Build giao diện…"
+    (cd "$UI_DIR" && npm run build --silent >/dev/null)
+    ok "Đã build giao diện"
+  fi
+  ASTRQ_API__FRONTEND_DIST="$(cd "$UI_DIR" && pwd)/dist"
+  export ASTRQ_API__FRONTEND_DIST
+else
+  warn "Không thấy giao diện ở $UI_DIR — chỉ chạy API (Swagger: /docs)."
+  warn "Clone astrq-platform-ui cạnh repo này để có dashboard."
 fi
 
 # ------------------------------------------------------------------ configuration
