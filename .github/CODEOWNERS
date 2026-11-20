@@ -2,6 +2,6 @@
 # Rulesets on main and release require an approval from a code owner;
 # any one listed owner (other than the PR author) is enough.
 *               @Astrq23 @Nemesis2302
-/backend-rs/    @Astrq23 @Nemesis2302
-/frontend/      @Astrq23 @Nemesis2302
+/src/           @Astrq23 @Nemesis2302
+/config/        @Astrq23 @Nemesis2302
 /.github/       @Astrq23 @Nemesis2302

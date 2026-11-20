@@ -9,9 +9,9 @@
 - [ ] Docs
 
 ## Testing
-<!-- How did you verify it? e.g. cargo test, npm run build, UI screenshots -->
+<!-- How did you verify it? e.g. cargo test, curl / Swagger (/docs), backtest output -->
 
 ## Checklist
-- [ ] CI passes (Backend tests, Frontend build)
+- [ ] CI passes (Backend tests)
 - [ ] No regression in signals / screener output (if backend logic changed)
 - [ ] README / docs updated if behaviour changed

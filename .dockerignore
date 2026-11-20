@@ -1,9 +1,8 @@
 .git
-.venv
+.github
 .env
 .tunnel
 data
-**/node_modules
-frontend/dist
-backend-rs/target
-backend-rs/tests
+target
+tests
+docs
