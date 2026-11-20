@@ -118,3 +118,4 @@ api:
   #   request_timeout_sec: 20
   # metrics_token: set to read /metrics remotely with "Authorization: Bearer <token>"
   # trust_proxy_headers: false   # true behind a public-IP proxy without origin_secret
+  # docs_enabled: true          # OpenAPI at /openapi.json, Swagger UI at /docs

@@ -509,6 +509,8 @@ pub struct ApiConfig {
     /// (Loopback / private-network proxies and requests with the origin secret are
     /// trusted anyway.)
     pub trust_proxy_headers: bool,
+    /// Serve the OpenAPI spec at `/openapi.json` and Swagger UI at `/docs`.
+    pub docs_enabled: bool,
 }
 
 /// Defense in depth against floods. Cloudflare in front absorbs volumetric DDoS; these
@@ -574,6 +576,7 @@ impl Default for ApiConfig {
             metrics_public: false,
             metrics_token: None,
             trust_proxy_headers: false,
+            docs_enabled: true,
         }
     }
 }

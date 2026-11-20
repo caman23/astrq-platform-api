@@ -44,6 +44,8 @@ tower-http = { version = "0.6", features = ["cors", "compression-gzip", "fs", "s
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 uuid = { version = "1", features = ["v5"] }
+utoipa = { version = "6", features = ["chrono", "axum_extras", "preserve_order"] }
+utoipa-swagger-ui = { version = "10", default-features = false, features = ["axum", "vendored"] }
 
 [dev-dependencies]
 http-body-util = "0.1"
