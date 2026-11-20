@@ -1,0 +1,44 @@
+name: Security audit
+
+# Separate from CI so a newly published advisory does not block unrelated PRs;
+# the weekly run surfaces it instead.
+on:
+  push:
+    branches: [main, develop, release]
+    paths: ["backend-rs/Cargo.lock", "backend-rs/Cargo.toml", "frontend/package-lock.json", ".github/workflows/audit.yml"]
+  pull_request:
+    paths: ["backend-rs/Cargo.lock", "backend-rs/Cargo.toml", "frontend/package-lock.json", ".github/workflows/audit.yml"]
+  schedule:
+    - cron: "0 1 * * 1" # Monday 08:00 Vietnam time
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - working-directory: backend-rs
+        run: cargo audit
+
+  npm-audit:
+    name: npm audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # Only runtime dependencies ship to users; dev tooling advisories are noise here.
+      - run: npm audit --omit=dev --audit-level=high

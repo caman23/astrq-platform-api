@@ -1,0 +1,32 @@
+# Weekly dependency updates, opened against develop (the integration branch).
+# Minor/patch bumps are grouped per ecosystem to keep PR noise low.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /backend-rs
+    target-branch: develop
+    schedule: { interval: weekly, day: monday, timezone: Asia/Ho_Chi_Minh }
+    groups:
+      cargo-minor:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    target-branch: develop
+    schedule: { interval: weekly, day: monday, timezone: Asia/Ho_Chi_Minh }
+    groups:
+      npm-minor:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: develop
+    schedule: { interval: weekly, day: monday, timezone: Asia/Ho_Chi_Minh }
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: /
+    target-branch: develop
+    schedule: { interval: weekly, day: monday, timezone: Asia/Ho_Chi_Minh }
