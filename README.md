@@ -1,4 +1,8 @@
-# ASTRQ — Stock Tools Platform
+# ASTRQ — Stock Tools Platform · API
+
+> Backend of the platform (Rust): realtime feed, tools, REST + WebSocket API.
+> Dashboard: **astrq-platform-ui** · deployment (Render, Docker Compose, keep-alive):
+> **infrastructure**. Clone the three repos side by side.
 
 Read-only, realtime analysis tools for Vietnamese equities. Tool #1 is the
 **Large Order Radar** (Radar Lệnh Lớn) for the VN100 basket: it detects single
@@ -64,10 +68,11 @@ first-session checklists in `docs/provider-notes.md`.
 
 ## Quick start
 
-Requirements: Rust (stable, via rustup), Node ≥ 20.
+Requirements: Rust (stable, via rustup). For the dashboard: Node ≥ 20 and
+`astrq-platform-ui` cloned next to this repo (`../astrq-platform-ui`).
 
 ```bash
-./run.sh            # one command: installs on first run, builds the UI, runs the feed from .env
+./run.sh            # one command: builds on first run (and the UI if present), runs the feed from .env
 ./run.sh --demo     # synthetic market (no key needed, works outside trading hours)
 ./run.sh --check    # verify DNSE key + 30 s stream sample
 ```
@@ -75,8 +80,8 @@ Requirements: Rust (stable, via rustup), Node ≥ 20.
 Or step by step:
 
 ```bash
-make install        # fetch Rust crates + frontend deps
-make up             # build dashboard, run backend + dashboard on http://127.0.0.1:8000
+make install        # fetch Rust crates
+make up             # backend on http://127.0.0.1:8000 (+ dashboard if ../astrq-platform-ui/dist exists)
 ```
 
 The default provider is a deterministic synthetic market running 30× faster than
@@ -87,12 +92,12 @@ Other targets:
 
 | Command | What it does |
 |---|---|
-| `make dev` | backend on :8000 + Vite hot reload on :5173 |
-| `make test` / `make lint` / `make check` | cargo test · rustfmt + clippy (-D warnings) + tsc |
+| `make dev` | backend on :8000 + Vite hot reload on :5173 (from `../astrq-platform-ui`) |
+| `make test` / `make lint` / `make check` | cargo test · rustfmt + clippy (-D warnings) |
 | `make simulate` | write a full synthetic trading day to `data/ticks/replay.jsonl` |
 | `make backtest` | run the radar offline over that file and print signal statistics |
 | `make replay` | serve the dashboard from recorded events instead of the synthetic feed |
-| `make docker-up` | Docker Compose (not yet tested; Docker was unavailable while building) |
+| `make ui-dist` · `make docker-build` | fetch the dashboard release pinned in `ui.version` · build the runtime image |
 
 Telegram alerts: copy `.env.example` to `.env` and set
 `ASTRQ_ALERTS__TELEGRAM__ENABLED=true`, `..._BOT_TOKEN`, `..._CHAT_ID`.
@@ -134,23 +139,27 @@ subdomains.
 ## Layout
 
 ```
-backend-rs/src/
+src/
   core/        models, config, bus, ingest, runner (isolation), alerts, platform/scheduler,
                sessions, market rules, metrics, recorder, R2 remote store, offline harness
   providers/   DNSE LightSpeed, SSI FastConnect, synthetic, replay, recorded baseline
   tools/       large_order_radar/ (tool #1), tick_counter/ (sample plugin)
-  api/         axum REST + WebSocket, serves frontend/dist
+  api/         axum REST + WebSocket, serves the dashboard build (frontend/dist in the image)
   main.rs      CLI: serve · simulate · backtest · dnse-check · ssi-check · ssi-universe · r2-check
-backend-rs/tests/ golden replay scenarios (parity with v1), isolation, vendors, API
-frontend/      React + Vite + TypeScript radar dashboard
+tests/         golden replay scenarios (parity with v1), isolation, vendors, API
 config/        settings.yaml, universe_vn100.yaml (sample — NOT the official basket)
 docs/          architecture, ADRs (0006: Rust rewrite), provider notes, writing-a-tool
+scripts/       tunnel-setup.sh (Cloudflare Tunnel for `./run.sh --public`)
+ui.version     dashboard release shipped in the image
 ```
 
 ## API
 
+Interactive docs: **Swagger UI at `/docs`**, OpenAPI 3.1 spec at `/openapi.json` (generated from the handlers with utoipa; `api.docs_enabled: false` turns both off).
+
 | Endpoint | |
 |---|---|
+| `GET /docs` · `GET /openapi.json` | Swagger UI · OpenAPI spec |
 | `GET /health`, `GET /ready`, `GET /metrics` | liveness, readiness, Prometheus text |
 | `GET /api/status` | clock, session, feed status, tick rate, feed vs internal latency, tools |
 | `GET /api/tools` · `POST /api/tools/{id}/enabled` | manifests/config/status · enable/disable |
@@ -184,4 +193,13 @@ or `api.origin_secret` on Render). The process itself also defends (`api.limits`
 
 Recommended on Cloudflare (free plan): a WAF rate-limiting rule on `/api/*` and `/ws`
 (e.g. 120 requests / 10 s per IP → block 1 min), Bot Fight Mode, and the origin secret
-transform rule from `docs/deploy-render.md`.
+transform rule from `docs/deploy-render.md` in the infrastructure repo.
+
+## Release & deploy
+
+- `develop` → `release` → `main` through PRs; CI must pass (Backend tests).
+- Every push to `main` builds `ghcr.io/<owner>/astrq-platform-api` (tags `sha-<commit>`
+  and `latest`) with the dashboard pinned in `ui.version`, then calls the Render deploy
+  hook (`RENDER_DEPLOY_HOOK_URL` secret) with that exact image. Tag `vX.Y.Z` on `main`
+  for a GitHub Release.
+- Ship a new dashboard: release it in astrq-platform-ui, then bump `ui.version` here via PR.

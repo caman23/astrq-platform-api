@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::time::Instant;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default, utoipa::ToSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Side {
     Buy,
@@ -96,6 +98,7 @@ impl Session {
     PartialOrd,
     Ord,
     schemars::JsonSchema,
+    utoipa::ToSchema,
 )]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
@@ -282,7 +285,7 @@ impl MarketEvent {
 }
 
 /// One factor's share of a signal's score; makes every score auditable.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct Contribution {
     pub factor: String,
     pub label: String,
@@ -298,7 +301,7 @@ fn default_state() -> String {
     "single".into()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Signal {
     pub signal_id: String,
     pub tool_id: String,
@@ -315,6 +318,7 @@ pub struct Signal {
     #[serde(default = "default_state")]
     pub state: String,
     #[serde(default)]
+    #[schema(value_type = Object)]
     pub features: Map<String, Value>,
     #[serde(default)]
     pub explanation: Vec<Contribution>,

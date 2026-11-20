@@ -1,53 +1,51 @@
-# ASTRQ Stock Tools Platform (Rust backend + React dashboard)
-# `make up` builds everything and runs backend + dashboard in one process on :8000.
+# astrq-platform-api — Rust backend (realtime feed, tools, REST + WebSocket API).
+# The dashboard lives in astrq-platform-ui; by default it is expected next to this repo
+# (../astrq-platform-ui, override with UI_DIR=...).
 
 export PATH := $(HOME)/.cargo/bin:$(PATH)
 SPEED   ?= 30
-BIN     := backend-rs/target/release/astrq
-CARGO   := cd backend-rs && cargo
+BIN     := target/release/astrq
+UI_DIR  ?= ../astrq-platform-ui
+UI_REPO ?= $(shell gh repo view --json owner -q .owner.login 2>/dev/null)/astrq-platform-ui
+IMAGE   ?= astrq-platform-api:local
 
-.PHONY: install build up dev backend frontend test lint fmt check simulate backtest replay \
-        docker-up clean ssi-check ssi-universe dnse-check r2-check
+.PHONY: install build up dev backend test lint fmt check simulate backtest replay \
+        ui-dist docker-build clean ssi-check ssi-universe dnse-check r2-check
 
 install:
-	cd frontend && npm install --no-audit --no-fund
-	$(CARGO) fetch
+	cargo fetch
 
 build:
-	$(CARGO) build --release
-	cd frontend && npm run build
+	cargo build --release
 
-$(BIN): $(shell find backend-rs/src -type f) backend-rs/Cargo.toml
-	$(CARGO) build --release
+$(BIN): $(shell find src -type f) Cargo.toml Cargo.lock
+	cargo build --release
 
-frontend/dist/index.html: $(shell find frontend/src -type f) frontend/index.html
-	cd frontend && npm run build
+# Serve the dashboard too when the UI repo is checked out (and built) next to this one
+UI_DIST   := $(wildcard $(UI_DIR)/dist/index.html)
+SERVE_ENV := $(if $(UI_DIST),ASTRQ_API__FRONTEND_DIST=$(abspath $(UI_DIR))/dist,)
 
-up: $(BIN) frontend/dist/index.html
-	$(BIN) serve --speed $(SPEED) --plain-logs
+up: $(BIN)
+	$(SERVE_ENV) $(BIN) serve --speed $(SPEED) --plain-logs
 
-# Hot-reload frontend on :5173 (proxying to the backend on :8000)
+backend: up
+
+# Backend on :8000 + Vite hot reload on :5173 (from the UI repo)
 dev: $(BIN)
+	@test -d $(UI_DIR) || (echo "clone astrq-platform-ui into $(UI_DIR) first" && false)
 	@echo "backend on :8000, dashboard on http://localhost:5173"
 	$(BIN) serve --speed $(SPEED) --plain-logs & \
-	cd frontend && npm run dev; kill %1
-
-backend: $(BIN)
-	$(BIN) serve --speed $(SPEED) --plain-logs
-
-frontend:
-	cd frontend && npm run dev
+	cd $(UI_DIR) && npm run dev; kill %1
 
 test:
-	$(CARGO) test
+	cargo test
 
 lint:
-	$(CARGO) fmt --check
-	$(CARGO) clippy --all-targets -- -D warnings
-	cd frontend && npm run typecheck
+	cargo fmt --check
+	cargo clippy --all-targets -- -D warnings
 
 fmt:
-	$(CARGO) fmt
+	cargo fmt
 
 check: lint test
 
@@ -58,9 +56,20 @@ simulate: $(BIN)
 backtest: $(BIN)
 	$(BIN) backtest --input data/ticks/replay.jsonl
 
-# Run the dashboard on recorded events instead of the live feed
-replay: $(BIN) frontend/dist/index.html
-	ASTRQ_PROVIDER__KIND=replay $(BIN) serve --plain-logs
+# Run on recorded events instead of the live feed
+replay: $(BIN)
+	ASTRQ_PROVIDER__KIND=replay $(SERVE_ENV) $(BIN) serve --plain-logs
+
+# Dashboard release pinned in ui.version -> ./ui-dist (what the image ships)
+ui-dist:
+	rm -rf ui-dist
+	mkdir -p ui-dist
+	gh release download "$$(cat ui.version)" --repo $(UI_REPO) --pattern ui-dist.tar.gz --output - \
+	  | tar -xz -C ui-dist
+
+docker-build:
+	mkdir -p ui-dist
+	docker build -t $(IMAGE) .
 
 # DNSE LightSpeed API: test credentials (WebSocket auth) + 30 s stream sample
 dnse-check: $(BIN)
@@ -76,9 +85,6 @@ ssi-universe: $(BIN)
 r2-check: $(BIN)
 	ASTRQ_STORAGE__REMOTE__KIND=r2 $(BIN) r2-check
 
-docker-up:
-	docker compose up --build
-
 clean:
-	rm -rf frontend/dist data/snapshots
-	$(CARGO) clean
+	rm -rf ui-dist data/snapshots
+	cargo clean

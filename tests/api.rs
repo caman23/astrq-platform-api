@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 fn settings(tmp: &std::path::Path) -> Settings {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     // ignore the developer's personal .env (it may point at a real feed)
     let mut s = load_settings(Some(&root.join("config/settings.yaml")), false).unwrap();
     s.provider.kind = "synthetic".into();

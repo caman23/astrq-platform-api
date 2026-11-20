@@ -1,7 +1,7 @@
 # Writing a tool
 
 A tool is a type that implements `core::tool::Tool`. No core change is needed. The full
-sample is in `backend-rs/src/tools/tick_counter/mod.rs`. A minimal one looks like this:
+sample is in `src/tools/tick_counter/mod.rs`. A minimal one looks like this:
 
 ```rust
 use anyhow::Result;
@@ -50,7 +50,7 @@ impl Tool for VolumeSpike {
 
 To register the tool:
 
-1. Add `pub mod volume_spike;` to `backend-rs/src/tools/mod.rs`.
+1. Add `pub mod volume_spike;` to `src/tools/mod.rs`.
 2. Add one arm in `build_tool`.
 3. Enable it in `config/settings.yaml`:
 
@@ -75,4 +75,4 @@ tools:
 - Optional: `view(...)` adds a dashboard view at `/api/tools/<id>/view`, and
   `daily_summary(ctx)` adds a section to the EOD report.
 - Test with `core::offline::run_offline`, which is deterministic. Add golden scenarios in
-  `backend-rs/tests/scenarios.rs`.
+  `tests/scenarios.rs`.

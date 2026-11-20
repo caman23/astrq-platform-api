@@ -2,6 +2,7 @@
 //! unchanged). Read-only market analysis: there is no trading endpoint.
 
 pub mod guard;
+pub mod openapi;
 pub mod server;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -43,7 +44,7 @@ pub fn router(platform: Arc<Platform>) -> Router {
     let guard = Guard::new(&s.api.limits);
     let cache = Arc::new(ResponseCache::new(&s.api.limits));
     let mut app = Router::new()
-        .route("/health", get(|| async { Json(json!({"status": "ok"})) }))
+        .route("/health", get(health))
         .route("/ready", get(ready))
         .route("/metrics", get(metrics))
         .route("/api/status", get(status))
@@ -63,6 +64,10 @@ pub fn router(platform: Arc<Platform>) -> Router {
         .route("/ws", get(ws))
         .layer(Extension(cache))
         .layer(Extension(guard.clone()));
+    if s.api.docs_enabled {
+        // Swagger UI at /docs, the spec at /openapi.json
+        app = app.merge(openapi::routes());
+    }
 
     let dist = s.path(&s.api.frontend_dist);
     if dist.join("index.html").exists() {
@@ -159,6 +164,11 @@ pub(crate) fn origin_ok(p: &Platform, headers: &HeaderMap) -> bool {
     })
 }
 
+/// Prometheus metrics (text). Only for local requests or with `Authorization: Bearer
+/// <metrics_token>` unless `api.metrics_public` is on; otherwise answers 404.
+#[utoipa::path(get, path = "/metrics", tag = "ops",
+    responses((status = 200, description = "Prometheus exposition format", body = String, content_type = "text/plain"),
+              (status = 404, description = "Not allowed from this client")))]
 async fn metrics(State(p): State<AppState>, req: Request) -> Response {
     let peer = req
         .extensions()
@@ -175,6 +185,17 @@ pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
+/// Liveness: the process is up (always 200).
+#[utoipa::path(get, path = "/health", tag = "ops",
+    responses((status = 200, description = "Process is up", body = openapi::Health)))]
+async fn health() -> Json<Value> {
+    Json(json!({"status": "ok"}))
+}
+
+/// Readiness: platform started, market feed connected and healthy.
+#[utoipa::path(get, path = "/ready", tag = "ops",
+    responses((status = 200, description = "Ready", body = openapi::Ready),
+              (status = 503, description = "Not ready (feed down or starting)", body = openapi::ErrorDetail)))]
 async fn ready(State(p): State<AppState>) -> Response {
     let connected = p.provider_status.lock().connected;
     let err = p.feed_error.lock().clone();
@@ -189,10 +210,16 @@ async fn ready(State(p): State<AppState>) -> Response {
     }
 }
 
+/// Platform status: provider connection, session, tools, counters.
+#[utoipa::path(get, path = "/api/status", tag = "platform",
+    responses((status = 200, description = "Status document", body = Object)))]
 async fn status(State(p): State<AppState>) -> Json<Value> {
     Json(p.status())
 }
 
+/// Instruments being scanned (VN100 basket) and where the list came from.
+#[utoipa::path(get, path = "/api/universe", tag = "platform",
+    responses((status = 200, description = "`{meta, instruments}`", body = Object)))]
 async fn universe(State(p): State<AppState>) -> Json<Value> {
     let u = p.universe.read();
     Json(json!({"meta": u.meta, "instruments": u.instruments()}))
@@ -221,13 +248,22 @@ fn known_symbol(p: &Platform, raw: &str) -> Option<String> {
     (s.len() <= 12 && p.universe.read().contains(&s)).then_some(s)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 struct SignalQuery {
+    /// Only signals of this tool (see `/api/tools`).
     tool_id: Option<String>,
+    /// Ticker in the universe, e.g. `FPT`.
     symbol: Option<String>,
+    /// `buy` | `sell` | `unknown`
     side: Option<String>,
+    /// `info` | `notice` | `alert` (this level and above)
     min_severity: Option<String>,
+    /// Max rows, newest first (default 200, max 2000).
+    #[param(maximum = 2000)]
     limit: Option<usize>,
+    /// Past session `YYYY-MM-DD` (see `/api/history`); omitted = live session.
+    #[param(format = Date)]
     date: Option<String>,
 }
 
@@ -248,6 +284,13 @@ fn filter_signals<'a>(
         .collect()
 }
 
+/// Signals, newest first. Supports `ETag` / `If-None-Match` (304).
+#[utoipa::path(get, path = "/api/signals", tag = "signals", params(SignalQuery),
+    responses((status = 200, description = "Signals", body = Vec<Signal>),
+              (status = 304, description = "Unchanged since `If-None-Match`"),
+              (status = 404, description = "Unknown tool / symbol, or no data for the date", body = openapi::ErrorDetail),
+              (status = 422, description = "Invalid parameter", body = openapi::ErrorDetail),
+              (status = 503, description = "Server busy, retry after `Retry-After` seconds")))]
 async fn signals(
     State(p): State<AppState>,
     Extension(cache): Extension<Arc<ResponseCache>>,
@@ -342,16 +385,24 @@ async fn signals(
     }
 }
 
+/// Alerts sent recently (Telegram, …), newest first.
+#[utoipa::path(get, path = "/api/alerts", tag = "signals",
+    responses((status = 200, description = "Alert history", body = Vec<Object>)))]
 async fn alerts(State(p): State<AppState>) -> Json<Value> {
     let h: Vec<_> = p.router.history.lock().iter().rev().cloned().collect();
     Json(json!(h))
 }
 
+/// Latest end-of-day summary text.
+#[utoipa::path(get, path = "/api/summary", tag = "signals",
+    responses((status = 200, description = "`{text}` (null before the first summary)", body = openapi::Summary)))]
 async fn summary(State(p): State<AppState>) -> Json<Value> {
     Json(json!({"text": *p.last_summary.lock()}))
 }
 
 /// Sessions that can be viewed: the live one and past ones still on record.
+#[utoipa::path(get, path = "/api/history", tag = "platform",
+    responses((status = 200, description = "Viewable sessions", body = openapi::History)))]
 async fn history(State(p): State<AppState>) -> Json<Value> {
     let dates: Vec<String> = p
         .history_dates()
@@ -369,12 +420,23 @@ async fn history(State(p): State<AppState>) -> Json<Value> {
 
 // ------------------------------------------------------------------ indicator screener
 
+/// Indicator catalog, operators and limits for the screener.
+#[utoipa::path(get, path = "/api/screener/meta", tag = "screener",
+    responses((status = 200, description = "Screener metadata", body = Object)))]
 async fn screener_meta(State(p): State<AppState>) -> Json<Value> {
     Json(p.screener.meta())
 }
 
 /// Run an indicator scan on demand (POST body = conditions). Results are cached for a
 /// minute per normalized request; at most two scans run at once.
+#[utoipa::path(post, path = "/api/screener/run", tag = "screener",
+    request_body(content = crate::screener::ScanRequest, description = "Conditions to evaluate on daily bars (max 16 KiB)"),
+    responses((status = 200, description = "Matching symbols with indicator values", body = Object),
+              (status = 413, description = "Body too large"),
+              (status = 415, description = "Body is not JSON"),
+              (status = 422, description = "Invalid conditions", body = openapi::ErrorDetail),
+              (status = 502, description = "Bar data source failed", body = openapi::ErrorDetail),
+              (status = 503, description = "Too many scans running, retry shortly")))]
 async fn screener_run(
     State(p): State<AppState>,
     body: Result<Json<crate::screener::ScanRequest>, axum::extract::rejection::JsonRejection>,
@@ -670,6 +732,9 @@ fn render_view(p: &Platform, id: &str, params: &HashMap<String, String>) -> Opti
     Some((version, serde_json::to_vec(&view).ok()?))
 }
 
+/// Installed tools: manifest, config, runtime status.
+#[utoipa::path(get, path = "/api/tools", tag = "tools",
+    responses((status = 200, description = "`[{manifest, config, status, control_enabled}]`", body = Vec<Object>)))]
 async fn tools(State(p): State<AppState>) -> Json<Value> {
     let control = p.s.api.allow_tool_control;
     let out: Vec<Value> = p
@@ -683,11 +748,18 @@ async fn tools(State(p): State<AppState>) -> Json<Value> {
     Json(json!(out))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct EnabledBody {
     enabled: bool,
 }
 
+/// Turn a tool on or off (forbidden when `api.allow_tool_control` is off).
+#[utoipa::path(post, path = "/api/tools/{id}/enabled", tag = "tools",
+    params(("id" = String, Path, description = "Tool id, e.g. `large_order_radar`")),
+    request_body = EnabledBody,
+    responses((status = 200, description = "New tool status", body = Object),
+              (status = 403, description = "Tool control disabled on this deployment", body = openapi::ErrorDetail),
+              (status = 404, description = "Unknown tool", body = openapi::ErrorDetail)))]
 async fn set_enabled(
     State(p): State<AppState>,
     Path(id): Path<String>,
@@ -709,6 +781,15 @@ async fn set_enabled(
     }
 }
 
+/// A tool's dashboard view (for the radar: leaderboard, orders, timeline, flow, …).
+/// Supports `ETag` / `If-None-Match` (304).
+#[utoipa::path(get, path = "/api/tools/{id}/view", tag = "tools",
+    params(("id" = String, Path, description = "Tool id, e.g. `large_order_radar`"), openapi::ViewParams),
+    responses((status = 200, description = "Tool-specific view document", body = Object),
+              (status = 304, description = "Unchanged since `If-None-Match`"),
+              (status = 404, description = "Unknown tool / symbol, tool has no view, or no data for the date", body = openapi::ErrorDetail),
+              (status = 422, description = "Invalid parameter", body = openapi::ErrorDetail),
+              (status = 503, description = "Server busy, retry after `Retry-After` seconds")))]
 async fn tool_view(
     State(p): State<AppState>,
     Extension(cache): Extension<Arc<ResponseCache>>,
@@ -801,6 +882,11 @@ const WS_MAX_MESSAGE: usize = 4 << 10;
 /// A client that cannot take a message for this long is dropped (it resyncs from REST).
 const WS_SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Live push channel (WebSocket). The server sends `{"type": "hello", "status": …}` then
+/// one JSON message per event (signals, status, …); messages from clients are ignored.
+#[utoipa::path(get, path = "/ws", tag = "realtime",
+    responses((status = 101, description = "Switching to WebSocket"),
+              (status = 429, description = "Too many live connections from this client")))]
 async fn ws(
     State(p): State<AppState>,
     Extension(g): Extension<Arc<Guard>>,
