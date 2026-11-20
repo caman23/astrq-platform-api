@@ -26,7 +26,7 @@ use indicators as ind;
 // ---------------------------------------------------------------- request model
 
 /// One side of a comparison: an indicator with parameters, or a constant.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 #[serde(default)]
 pub struct Operand {
     /// indicator id (see [`catalog`]); absent = constant `value`
@@ -48,14 +48,14 @@ pub struct Operand {
     pub field: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Condition {
     pub left: Operand,
     pub op: String,
     pub right: Operand,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(default)]
 pub struct ScanRequest {
     pub conditions: Vec<Condition>,

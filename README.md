@@ -149,8 +149,11 @@ docs/          architecture, ADRs (0006: Rust rewrite), provider notes, writing-
 
 ## API
 
+Interactive docs: **Swagger UI at `/docs`**, OpenAPI 3.1 spec at `/openapi.json` (generated from the handlers with utoipa; `api.docs_enabled: false` turns both off).
+
 | Endpoint | |
 |---|---|
+| `GET /docs` · `GET /openapi.json` | Swagger UI · OpenAPI spec |
 | `GET /health`, `GET /ready`, `GET /metrics` | liveness, readiness, Prometheus text |
 | `GET /api/status` | clock, session, feed status, tick rate, feed vs internal latency, tools |
 | `GET /api/tools` · `POST /api/tools/{id}/enabled` | manifests/config/status · enable/disable |
